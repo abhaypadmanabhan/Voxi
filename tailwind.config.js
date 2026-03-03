@@ -3,7 +3,17 @@ export default {
   theme: {
     extend: {
       colors: {
-        voxi: '#6C63FF',
+        voxi: {
+          DEFAULT: "#6C63FF",
+          50: "#f0efff",
+          100: "#e2e0ff",
+          500: "#6C63FF",
+          600: "#5a52e8",
+          700: "#4840d1",
+        },
+      },
+      fontFamily: {
+        sans: ["Inter", "system-ui", "sans-serif"],
       },
     },
   },

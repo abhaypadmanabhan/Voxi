@@ -23,7 +23,12 @@
     "vite": "^5"
   },
   "dependencies": {
+    "class-variance-authority": "^0.7.1",
+    "clsx": "^2.1.1",
+    "framer-motion": "^12.34.4",
+    "lucide-react": "^0.576.0",
     "react": "^18",
-    "react-dom": "^18"
+    "react-dom": "^18",
+    "tailwind-merge": "^3.5.0"
   }
 }
