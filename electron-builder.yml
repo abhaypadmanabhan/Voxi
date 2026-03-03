@@ -1,0 +1,16 @@
+appId: com.voxi.app
+productName: Voxi
+directories:
+  buildResources: resources
+  output: dist
+files:
+  - out/**/*
+mac:
+  target:
+    - target: dmg
+      arch: [arm64, x64]
+  category: public.app-category.productivity
+win:
+  target:
+    - target: nsis
+      arch: [x64]
