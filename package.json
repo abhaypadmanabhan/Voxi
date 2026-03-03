@@ -1,24 +1,40 @@
 {
-  "name": "voxi-server",
+  "name": "voxi",
   "version": "0.1.0",
-  "private": true,
-  "type": "module",
+  "description": "Voice dictation floating bubble",
+  "main": "./out/main/main.js",
   "scripts": {
-    "dev": "tsx watch src/server.ts",
-    "build": "tsc -p tsconfig.json",
-    "start": "node dist/server.js"
+    "dev": "electron-vite dev",
+    "build": "electron-vite build",
+    "preview": "electron-vite preview",
+    "dist": "npm run build && electron-builder",
+    "dev:server": "tsx watch src/server.ts",
+    "build:server": "tsc -p tsconfig.server.json",
+    "start:server": "node dist/server.js"
+  },
+  "devDependencies": {
+    "@types/node": "^22.18.8",
+    "@types/react": "^18",
+    "@types/react-dom": "^18",
+    "@types/ws": "^8.18.1",
+    "@vitejs/plugin-react": "^4",
+    "autoprefixer": "^10",
+    "electron": "^29",
+    "electron-builder": "^24",
+    "electron-vite": "^2",
+    "postcss": "^8",
+    "tailwindcss": "^3",
+    "tsx": "^4.20.5",
+    "typescript": "^5.9.2",
+    "vite": "^5"
   },
   "dependencies": {
     "@anthropic-ai/sdk": "^0.66.0",
     "@fastify/websocket": "^11.0.2",
     "dotenv": "^16.6.1",
     "fastify": "^5.6.1",
+    "react": "^18",
+    "react-dom": "^18",
     "zod": "^3.25.76"
-  },
-  "devDependencies": {
-    "@types/node": "^22.18.8",
-    "@types/ws": "^8.18.1",
-    "tsx": "^4.20.5",
-    "typescript": "^5.9.2"
   }
 }

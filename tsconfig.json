@@ -1,16 +1,12 @@
 {
   "compilerOptions": {
-    "target": "ES2022",
-    "module": "NodeNext",
-    "moduleResolution": "NodeNext",
+    "target": "ES2020",
+    "module": "ESNext",
+    "lib": ["ES2020", "DOM", "DOM.Iterable"],
+    "moduleResolution": "bundler",
     "strict": true,
-    "esModuleInterop": true,
-    "forceConsistentCasingInFileNames": true,
-    "skipLibCheck": true,
-    "resolveJsonModule": true,
-    "rootDir": "src",
-    "outDir": "dist",
-    "types": ["node"]
+    "jsx": "react-jsx",
+    "skipLibCheck": true
   },
   "include": ["src"]
 }
