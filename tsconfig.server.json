@@ -1,0 +1,22 @@
+{
+  "compilerOptions": {
+    "target": "ES2022",
+    "module": "NodeNext",
+    "moduleResolution": "NodeNext",
+    "strict": true,
+    "esModuleInterop": true,
+    "forceConsistentCasingInFileNames": true,
+    "skipLibCheck": true,
+    "resolveJsonModule": true,
+    "outDir": "dist",
+    "types": ["node"]
+  },
+  "include": [
+    "src/server.ts",
+    "src/ws-handler.ts",
+    "src/asr.ts",
+    "src/formatter.ts",
+    "src/command.ts",
+    "src/types.ts"
+  ]
+}

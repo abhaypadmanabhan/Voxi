@@ -7,11 +7,16 @@
     "dev": "electron-vite dev",
     "build": "electron-vite build",
     "preview": "electron-vite preview",
-    "dist": "npm run build && electron-builder"
+    "dist": "npm run build && electron-builder",
+    "dev:server": "tsx watch src/server.ts",
+    "build:server": "tsc -p tsconfig.server.json",
+    "start:server": "node dist/server.js"
   },
   "devDependencies": {
+    "@types/node": "^22.18.8",
     "@types/react": "^18",
     "@types/react-dom": "^18",
+    "@types/ws": "^8.18.1",
     "@vitejs/plugin-react": "^4",
     "autoprefixer": "^10",
     "electron": "^29",
@@ -19,16 +24,22 @@
     "electron-vite": "^2",
     "postcss": "^8",
     "tailwindcss": "^3",
-    "typescript": "^5",
+    "tsx": "^4.20.5",
+    "typescript": "^5.9.2",
     "vite": "^5"
   },
   "dependencies": {
+    "@anthropic-ai/sdk": "^0.66.0",
+    "@fastify/websocket": "^11.0.2",
     "class-variance-authority": "^0.7.1",
     "clsx": "^2.1.1",
+    "dotenv": "^16.6.1",
+    "fastify": "^5.6.1",
     "framer-motion": "^12.34.4",
     "lucide-react": "^0.576.0",
     "react": "^18",
     "react-dom": "^18",
-    "tailwind-merge": "^3.5.0"
+    "tailwind-merge": "^3.5.0",
+    "zod": "^3.25.76"
   }
 }
