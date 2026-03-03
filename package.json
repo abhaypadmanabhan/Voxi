@@ -1,0 +1,29 @@
+{
+  "name": "voxi",
+  "version": "0.1.0",
+  "description": "Voice dictation floating bubble",
+  "main": "./out/main/main.js",
+  "scripts": {
+    "dev": "electron-vite dev",
+    "build": "electron-vite build",
+    "preview": "electron-vite preview",
+    "dist": "npm run build && electron-builder"
+  },
+  "devDependencies": {
+    "@types/react": "^18",
+    "@types/react-dom": "^18",
+    "@vitejs/plugin-react": "^4",
+    "autoprefixer": "^10",
+    "electron": "^29",
+    "electron-builder": "^24",
+    "electron-vite": "^2",
+    "postcss": "^8",
+    "tailwindcss": "^3",
+    "typescript": "^5",
+    "vite": "^5"
+  },
+  "dependencies": {
+    "react": "^18",
+    "react-dom": "^18"
+  }
+}

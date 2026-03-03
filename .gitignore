@@ -1,0 +1,5 @@
+node_modules/
+out/
+dist/
+.env
+EOF && git add .gitignore && git rm -r --cached node_modules out
