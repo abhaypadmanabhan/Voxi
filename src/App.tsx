@@ -1,4 +1,7 @@
-import { useEffect, useState } from 'react'
+import { useEffect, useRef, useState } from 'react'
+import RecordingBubble from './components/RecordingBubble'
+import TranscriptToast from './components/TranscriptToast'
+import SettingsPanel from './components/SettingsPanel'
 
 declare global {
   interface Window {
@@ -7,14 +10,45 @@ declare global {
       stopRecording: () => void
       onTranscript: (cb: (text: string) => void) => void
       onStatus: (cb: (status: string) => void) => void
+      onStartMic: (cb: () => void) => void
+      onStopMic: (cb: () => void) => void
+      sendAudioChunk: (b64: string) => void
+      onStreamingPreview: (cb: (text: string) => void) => void
     }
   }
 }
 
 type Status = 'idle' | 'recording' | 'processing'
 
+const WORKLET_CODE = `
+class PCM16Processor extends AudioWorkletProcessor {
+  process(inputs) {
+    const ch = inputs[0]?.[0]
+    if (ch) {
+      const out = new Int16Array(ch.length)
+      for (let i = 0; i < ch.length; i++)
+        out[i] = Math.max(-32768, Math.min(32767, Math.round(ch[i] * 32767)))
+      this.port.postMessage(out)
+    }
+    return true
+  }
+}
+registerProcessor('pcm16-processor', PCM16Processor)
+`
+
+interface MicState {
+  stream: MediaStream
+  ctx: AudioContext
+  worklet: AudioWorkletNode
+  timer: ReturnType<typeof setInterval>
+}
+
 export default function App() {
   const [status, setStatus] = useState<Status>('idle')
+  const [streamingPreview, setStreamingPreview] = useState('')
+  const [transcript, setTranscript] = useState('')
+  const [showSettings, setShowSettings] = useState(false)
+  const micRef = useRef<MicState | null>(null)
 
   useEffect(() => {
     window.voxi.onStatus((s) => {
@@ -22,7 +56,59 @@ export default function App() {
         setStatus(s)
       }
     })
+    window.voxi.onTranscript((t) => {
+      setTranscript(t)
+      setStreamingPreview('')
+    })
+    window.voxi.onStreamingPreview((token) => {
+      setStreamingPreview((p) => p + token)
+    })
+    window.voxi.onStartMic(startMic)
+    window.voxi.onStopMic(stopMic)
   }, [])
+
+  async function startMic() {
+    const stream = await navigator.mediaDevices.getUserMedia({
+      audio: {
+        sampleRate: 16000,
+        channelCount: 1,
+        echoCancellation: true,
+        noiseSuppression: true,
+      },
+    })
+    const ctx = new AudioContext({ sampleRate: 16000 })
+    const workletBlob = new Blob([WORKLET_CODE], { type: 'application/javascript' })
+    await ctx.audioWorklet.addModule(URL.createObjectURL(workletBlob))
+    const source = ctx.createMediaStreamSource(stream)
+    const worklet = new AudioWorkletNode(ctx, 'pcm16-processor')
+    const buffers: Int16Array[] = []
+    worklet.port.onmessage = (e: MessageEvent<Int16Array>) => buffers.push(e.data)
+    const timer = setInterval(() => {
+      if (!buffers.length) return
+      const total = buffers.reduce((n, b) => n + b.length, 0)
+      const merged = new Int16Array(total)
+      let offset = 0
+      for (const b of buffers) {
+        merged.set(b, offset)
+        offset += b.length
+      }
+      buffers.length = 0
+      const b64 = btoa(String.fromCharCode(...new Uint8Array(merged.buffer)))
+      window.voxi.sendAudioChunk(b64)
+    }, 250)
+    source.connect(worklet)
+    micRef.current = { stream, ctx, worklet, timer }
+  }
+
+  function stopMic() {
+    const m = micRef.current
+    if (!m) return
+    clearInterval(m.timer)
+    m.worklet.disconnect()
+    m.ctx.close()
+    m.stream.getTracks().forEach((t) => t.stop())
+    micRef.current = null
+  }
 
   function handleClick() {
     if (status === 'idle') {
@@ -33,47 +119,23 @@ export default function App() {
   }
 
   return (
-    <button
-      onClick={handleClick}
-      className="w-20 h-20 rounded-full flex items-center justify-center focus:outline-none"
-      style={status === 'idle' ? { backgroundColor: 'white', boxShadow: '0 4px 12px rgba(0,0,0,0.15)' } : undefined}
-    >
-      {status === 'idle' && (
-        <div className="w-20 h-20 rounded-full bg-white shadow-lg flex items-center justify-center">
-          <MicIcon color="#6C63FF" />
-        </div>
-      )}
-
-      {status === 'recording' && (
-        <div className="w-20 h-20 rounded-full bg-red-500 animate-pulse flex items-center justify-center">
-          <MicIcon color="white" />
-        </div>
-      )}
-
-      {status === 'processing' && (
-        <div className="w-20 h-20 rounded-full flex items-center justify-center">
-          <div
-            className="w-20 h-20 rounded-full border-4 border-t-transparent animate-spin"
-            style={{ borderColor: '#6C63FF', borderTopColor: 'transparent' }}
-          />
-        </div>
-      )}
-    </button>
-  )
-}
-
-function MicIcon({ color }: { color: string }) {
-  return (
-    <svg width="32" height="32" viewBox="0 0 24 24" fill="none" xmlns="http://www.w3.org/2000/svg">
-      <rect x="9" y="2" width="6" height="11" rx="3" fill={color} />
-      <path
-        d="M5 10a7 7 0 0 0 14 0"
-        stroke={color}
-        strokeWidth="2"
-        strokeLinecap="round"
+    <>
+      <RecordingBubble
+        status={status}
+        onClick={handleClick}
+        onRightClick={() => setShowSettings(true)}
       />
-      <line x1="12" y1="17" x2="12" y2="21" stroke={color} strokeWidth="2" strokeLinecap="round" />
-      <line x1="9" y1="21" x2="15" y2="21" stroke={color} strokeWidth="2" strokeLinecap="round" />
-    </svg>
+      {(streamingPreview || transcript) && (
+        <TranscriptToast
+          text={streamingPreview || transcript}
+          isStreaming={status === 'processing'}
+          onDismiss={() => {
+            setTranscript('')
+            setStreamingPreview('')
+          }}
+        />
+      )}
+      {showSettings && <SettingsPanel onClose={() => setShowSettings(false)} />}
+    </>
   )
 }

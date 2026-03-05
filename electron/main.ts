@@ -1,7 +1,10 @@
 import { app, BrowserWindow, globalShortcut, ipcMain, screen } from 'electron'
 import { join } from 'path'
+import WebSocket = require('ws')
+import { keyboard } from '@nut-tree-fork/nut-js'
 
 let mainWindow: BrowserWindow | null = null
+let ws: WebSocket | null = null
 let isRecording = false
 
 function createWindow() {
@@ -33,22 +36,75 @@ function createWindow() {
   }
 }
 
+async function startPipeline() {
+  if (isRecording) return
+  isRecording = true
+
+  const activeWin = await import('active-win')
+  const focused = await activeWin()
+  const appName = focused?.owner?.name ?? 'Unknown'
+
+  ws = new WebSocket('ws://localhost:3001/transcribe')
+
+  ws.on('open', () => {
+    ws!.send(JSON.stringify({ type: 'context', appName }))
+    mainWindow?.webContents.send('status', 'recording')
+    mainWindow?.webContents.send('start-mic')
+  })
+
+  ws.on('message', async (raw: WebSocket.RawData) => {
+    const msg = JSON.parse(raw.toString()) as { type: string; data?: string }
+    if (msg.type === 'token') {
+      mainWindow?.webContents.send('status', 'processing')
+      mainWindow?.webContents.send('streaming-preview', msg.data)
+    } else if (msg.type === 'done') {
+      await keyboard.type(msg.data ?? '')
+      mainWindow?.webContents.send('transcript', msg.data)
+      mainWindow?.webContents.send('status', 'idle')
+      ws?.close()
+      ws = null
+      isRecording = false
+    } else if (msg.type === 'error') {
+      mainWindow?.webContents.send('status', 'idle')
+      ws?.close()
+      ws = null
+      isRecording = false
+    }
+  })
+
+  ws.on('error', () => {
+    mainWindow?.webContents.send('status', 'idle')
+    ws = null
+    isRecording = false
+  })
+}
+
+function stopPipeline() {
+  if (!isRecording) return
+  mainWindow?.webContents.send('stop-mic')
+  if (ws?.readyState === WebSocket.OPEN) {
+    ws.send(JSON.stringify({ type: 'end_stream' }))
+  }
+  isRecording = false
+}
+
 app.whenReady().then(() => {
   createWindow()
 
   globalShortcut.register('CommandOrControl+Shift+V', () => {
-    isRecording = !isRecording
-    mainWindow?.webContents.send('status', isRecording ? 'recording' : 'idle')
+    if (isRecording) {
+      stopPipeline()
+    } else {
+      startPipeline()
+    }
   })
 
-  ipcMain.on('start-recording', () => {
-    isRecording = true
-    mainWindow?.webContents.send('status', 'recording')
-  })
-
-  ipcMain.on('stop-recording', () => {
-    isRecording = false
-    mainWindow?.webContents.send('status', 'idle')
+  ipcMain.on('start-recording', () => startPipeline())
+  ipcMain.on('stop-recording', () => stopPipeline())
+  ipcMain.on('audio-chunk', (_e, b64: string) => {
+    if (ws?.readyState === WebSocket.OPEN) {
+      ws.send(JSON.stringify({ type: 'audio_chunk', data: b64 }))
+    }
   })
 })
 
