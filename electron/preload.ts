@@ -15,4 +15,8 @@ contextBridge.exposeInMainWorld('voxi', {
     ipcRenderer.send('audio-chunk', b64),
   onStreamingPreview: (cb: (text: string) => void) =>
     ipcRenderer.on('streaming-preview', (_e, t) => cb(t)),
+  getSetting: (key: string) => ipcRenderer.invoke('get-setting', key),
+  setSetting: (key: string, value: string) => ipcRenderer.invoke('set-setting', key, value),
+  setApiKey: (name: string, value: string) => ipcRenderer.invoke('set-api-key', name, value),
+  getApiKey: (name: string) => ipcRenderer.invoke('get-api-key', name),
 })

@@ -1,7 +1,8 @@
-import { app, BrowserWindow, globalShortcut, ipcMain, screen } from 'electron'
+import { app, BrowserWindow, clipboard, dialog, globalShortcut, ipcMain, screen, shell } from 'electron'
 import { join } from 'path'
 import WebSocket = require('ws')
-import { keyboard } from '@nut-tree-fork/nut-js'
+import { Key, keyboard } from '@nut-tree-fork/nut-js'
+import { addCorrection, findCorrection, getSetting, setSetting, setApiKey, getApiKey } from './store'
 
 let mainWindow: BrowserWindow | null = null
 let ws: WebSocket | null = null
@@ -40,8 +41,8 @@ async function startPipeline() {
   if (isRecording) return
   isRecording = true
 
-  const activeWin = await import('active-win')
-  const focused = await activeWin()
+  const { default: activeWindow } = await import('active-win')
+  const focused = await activeWindow()
   const appName = focused?.owner?.name ?? 'Unknown'
 
   ws = new WebSocket('ws://localhost:3001/transcribe')
@@ -58,7 +59,7 @@ async function startPipeline() {
       mainWindow?.webContents.send('status', 'processing')
       mainWindow?.webContents.send('streaming-preview', msg.data)
     } else if (msg.type === 'done') {
-      await keyboard.type(msg.data ?? '')
+      await injectText(msg.data ?? '', appName)
       mainWindow?.webContents.send('transcript', msg.data)
       mainWindow?.webContents.send('status', 'idle')
       ws?.close()
@@ -85,7 +86,54 @@ function stopPipeline() {
   if (ws?.readyState === WebSocket.OPEN) {
     ws.send(JSON.stringify({ type: 'end_stream' }))
   }
-  isRecording = false
+  // isRecording stays true until ws 'done' or 'error' resets it
+}
+
+const CODE_APPS = new Set(['terminal', 'code', 'cursor'])
+
+async function injectText(text: string, appName: string): Promise<void> {
+  // Apply any learned user corrections first
+  const corrected = findCorrection(text) ?? text
+
+  try {
+    // For normal apps (not code editors/terminals), select-all first
+    // so the dictated text replaces any stale selection.
+    // Skip for coding tools to avoid clobbering existing work.
+    if (!CODE_APPS.has(appName.toLowerCase())) {
+      await keyboard.pressKey(Key.LeftCmd, Key.A)
+      await keyboard.releaseKey(Key.LeftCmd, Key.A)
+    }
+
+    // Let focus fully settle before typing
+    await new Promise<void>((resolve) => setTimeout(resolve, 50))
+
+    await keyboard.type(corrected)
+  } catch (err) {
+    console.error('[nut-js] injection failed:', err)
+    const { response } = await dialog.showMessageBox({
+      type: 'warning',
+      message: 'Flow needs Accessibility access',
+      detail:
+        'To inject text, enable Flow in System Settings → Privacy & Security → Accessibility.',
+      buttons: ['Open System Settings', 'Cancel'],
+      defaultId: 0,
+      cancelId: 1,
+    })
+    if (response === 0) {
+      await shell.openExternal(
+        'x-apple.systempreferences:com.apple.preference.security?Privacy_Accessibility',
+      )
+    }
+    return
+  }
+
+  // 3-second clipboard diff: if user edited the injected text, store correction
+  setTimeout(() => {
+    const clipped = clipboard.readText()
+    if (clipped && clipped !== corrected) {
+      addCorrection(corrected, clipped, appName)
+    }
+  }, 3000)
 }
 
 app.whenReady().then(() => {
@@ -101,6 +149,10 @@ app.whenReady().then(() => {
 
   ipcMain.on('start-recording', () => startPipeline())
   ipcMain.on('stop-recording', () => stopPipeline())
+  ipcMain.handle('get-setting', (_e, key: string) => getSetting(key))
+  ipcMain.handle('set-setting', (_e, key: string, value: string) => setSetting(key, value))
+  ipcMain.handle('set-api-key', (_e, name: string, value: string) => setApiKey(name, value))
+  ipcMain.handle('get-api-key', (_e, name: string) => getApiKey(name))
   ipcMain.on('audio-chunk', (_e, b64: string) => {
     if (ws?.readyState === WebSocket.OPEN) {
       ws.send(JSON.stringify({ type: 'audio_chunk', data: b64 }))
