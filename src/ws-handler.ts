@@ -1,6 +1,7 @@
 import type { FastifyInstance } from 'fastify';
 import type WebSocket from 'ws';
-import { transcribeWithMiniMax } from './asr.js';
+import jwt from 'jsonwebtoken';
+import { transcribeAudio } from './asr.js';
 import { handleCommand } from './command.js';
 import { streamFormattedText } from './formatter.js';
 import { ClientMessageSchema, type ServerMessage, type WsSessionState } from './types.js';
@@ -27,11 +28,26 @@ function assertContext(state: WsSessionState): string {
 }
 
 export async function registerTranscribeWsRoute(fastify: FastifyInstance): Promise<void> {
-  fastify.get('/transcribe', { websocket: true }, (socket) => {
+  fastify.get('/transcribe', { websocket: true }, (socket, request) => {
+    // Decode JWT from Authorization header (best-effort; null = not authenticated)
+    let plan: 'free' | 'pro' | null = null;
+    const authHeader = (request.headers.authorization as string | undefined) ?? '';
+    const token = authHeader.startsWith('Bearer ') ? authHeader.slice(7) : '';
+    if (token) {
+      try {
+        const secret = process.env.VOXI_SECRET_KEY ?? 'dev-secret';
+        const payload = jwt.verify(token, secret) as { userId?: string; plan?: string };
+        plan = payload.plan === 'pro' ? 'pro' : 'free';
+      } catch {
+        plan = null; // invalid token → treat as unauthenticated
+      }
+    }
+
     const state: WsSessionState = {
       appName: undefined,
       isContextSet: false,
-      audioChunks: []
+      audioChunks: [],
+      plan
     };
 
     socket.on('message', async (rawData: WebSocket.RawData) => {
@@ -54,15 +70,17 @@ export async function registerTranscribeWsRoute(fastify: FastifyInstance): Promi
       }
 
       const message = parsed.data;
+      console.log(`[ws] received: ${message.type}`);
 
       try {
         if (message.type === 'context') {
           state.appName = message.appName;
           state.isContextSet = true;
+          console.log(`[ws] context set, appName=${message.appName}`);
           return;
         }
 
-        const appName = assertContext(state);
+        assertContext(state);
 
         if (message.type === 'audio_chunk') {
           const chunk = decodeAudioChunk(message.data);
@@ -74,12 +92,23 @@ export async function registerTranscribeWsRoute(fastify: FastifyInstance): Promi
         }
 
         if (message.type === 'command') {
-          const result = handleCommand({
-            instruction: message.instruction,
-            clipboardContent: message.clipboardContent,
-            appName
-          });
-          sendMessage(socket, { type: 'command_result', data: result });
+          // Feature gate: only pro users can use commands
+          if (state.plan !== 'pro') {
+            sendMessage(socket, { type: 'gate', message: 'upgrade_required' });
+            return;
+          }
+
+          const fullText = await handleCommand(
+            {
+              instruction: message.instruction,
+              clipboardContent: message.clipboardContent
+            },
+            (tok) => {
+              sendMessage(socket, { type: 'token', data: tok });
+            }
+          );
+
+          sendMessage(socket, { type: 'done', data: fullText });
           return;
         }
 
@@ -91,12 +120,24 @@ export async function registerTranscribeWsRoute(fastify: FastifyInstance): Promi
           const fullAudio = Buffer.concat(state.audioChunks);
           state.audioChunks = [];
 
-          const transcript = await transcribeWithMiniMax(fullAudio.toString('base64'));
+          console.log(`[ws] calling Groq Whisper, audio size=${fullAudio.length} bytes`);
+          const transcript = await transcribeAudio(fullAudio.toString('base64'));
+          console.log(`[ws] transcript: "${transcript}"`);
+
+          // Send raw transcript to Electron for "hey voxi" detection
+          sendMessage(socket, { type: 'raw_transcript', data: transcript });
+
+          // If it's a "hey voxi" command, skip formatting — Electron will send a command message
+          if (transcript.toLowerCase().startsWith('hey voxi')) {
+            return;
+          }
+
+          // Normal dictation: format and stream
           const formatted = await streamFormattedText({
             rawTranscript: transcript,
-            appName,
-            onToken: (token) => {
-              sendMessage(socket, { type: 'token', data: token });
+            appName: state.appName!,
+            onToken: (tok) => {
+              sendMessage(socket, { type: 'token', data: tok });
             }
           });
 
@@ -105,6 +146,7 @@ export async function registerTranscribeWsRoute(fastify: FastifyInstance): Promi
         }
       } catch (error) {
         const messageText = error instanceof Error ? error.message : 'Unknown server error';
+        console.error('[ws] error:', messageText);
         state.audioChunks = [];
         sendMessage(socket, { type: 'error', data: messageText });
       }

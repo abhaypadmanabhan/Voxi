@@ -5,12 +5,10 @@ import { z } from 'zod';
 import { registerTranscribeWsRoute } from './ws-handler.js';
 
 const EnvSchema = z.object({
-  MINIMAX_API_KEY: z.string().min(1),
+  GROQ_API_KEY: z.string().min(1),
   ANTHROPIC_API_KEY: z.string().min(1),
   VOXI_SECRET_KEY: z.string().min(1),
   PORT: z.coerce.number().int().positive().default(3001),
-  MINIMAX_STT_CREATE_URL: z.string().url().optional(),
-  MINIMAX_STT_POLL_URL: z.string().optional()
 });
 
 const parsedEnv = EnvSchema.safeParse(process.env);

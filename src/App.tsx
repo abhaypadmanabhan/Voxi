@@ -2,6 +2,7 @@ import { useEffect, useRef, useState } from 'react'
 import RecordingBubble from './components/RecordingBubble'
 import TranscriptToast from './components/TranscriptToast'
 import SettingsPanel from './components/SettingsPanel'
+import UpgradeToast from './components/UpgradeToast'
 
 declare global {
   interface Window {
@@ -14,6 +15,7 @@ declare global {
       onStopMic: (cb: () => void) => void
       sendAudioChunk: (b64: string) => void
       onStreamingPreview: (cb: (text: string) => void) => void
+      onGate: (cb: () => void) => void
     }
   }
 }
@@ -48,6 +50,7 @@ export default function App() {
   const [streamingPreview, setStreamingPreview] = useState('')
   const [transcript, setTranscript] = useState('')
   const [showSettings, setShowSettings] = useState(false)
+  const [showUpgradeToast, setShowUpgradeToast] = useState(false)
   const micRef = useRef<MicState | null>(null)
 
   useEffect(() => {
@@ -63,11 +66,13 @@ export default function App() {
     window.voxi.onStreamingPreview((token) => {
       setStreamingPreview((p) => p + token)
     })
-    window.voxi.onStartMic(startMic)
+    window.voxi.onStartMic(() => startMic().catch((e) => console.error('[mic] failed:', e)))
     window.voxi.onStopMic(stopMic)
+    window.voxi.onGate(() => setShowUpgradeToast(true))
   }, [])
 
   async function startMic() {
+    console.log('[mic] requesting getUserMedia')
     const stream = await navigator.mediaDevices.getUserMedia({
       audio: {
         sampleRate: 16000,
@@ -98,6 +103,7 @@ export default function App() {
     }, 250)
     source.connect(worklet)
     micRef.current = { stream, ctx, worklet, timer }
+    console.log('[mic] started')
   }
 
   function stopMic() {
@@ -136,6 +142,9 @@ export default function App() {
         />
       )}
       {showSettings && <SettingsPanel onClose={() => setShowSettings(false)} />}
+      {showUpgradeToast && (
+        <UpgradeToast onDismiss={() => setShowUpgradeToast(false)} />
+      )}
     </>
   )
 }

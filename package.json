@@ -6,6 +6,7 @@
   "main": "./out/main/main.js",
   "type": "module",
   "scripts": {
+    "postinstall": "electron-rebuild -f -w better-sqlite3",
     "dev": "electron-vite dev",
     "build": "electron-vite build",
     "preview": "electron-vite preview",
@@ -16,6 +17,8 @@
     "test": "vitest run"
   },
   "devDependencies": {
+    "@electron/rebuild": "^4.0.3",
+    "@types/jsonwebtoken": "^9.0.10",
     "@types/node": "^22.18.8",
     "@types/react": "^18",
     "@types/react-dom": "^18",
@@ -49,6 +52,7 @@
     "electron-store": "^11.0.2",
     "fastify": "^5.6.1",
     "framer-motion": "^12.34.4",
+    "jsonwebtoken": "^9.0.3",
     "lucide-react": "^0.576.0",
     "node-machine-id": "^1.1.12",
     "react": "^18",

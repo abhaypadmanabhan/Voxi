@@ -37,6 +37,8 @@ export type ServerMessage =
   | { type: 'token'; data: string }
   | { type: 'done'; data: string }
   | { type: 'error'; data: string }
+  | { type: 'raw_transcript'; data: string }
+  | { type: 'gate'; message: string }
   | {
       type: 'command_result';
       data: {
@@ -51,4 +53,5 @@ export interface WsSessionState {
   appName?: string;
   isContextSet: boolean;
   audioChunks: Buffer[];
+  plan: 'free' | 'pro' | null;
 }

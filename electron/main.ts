@@ -1,12 +1,24 @@
-import { app, BrowserWindow, clipboard, dialog, globalShortcut, ipcMain, screen, shell } from 'electron'
+import { app, BrowserWindow, clipboard, dialog, globalShortcut, ipcMain, screen, session, shell } from 'electron'
 import { join } from 'path'
 import WebSocket = require('ws')
+import jwt from 'jsonwebtoken'
 import { Key, keyboard } from '@nut-tree-fork/nut-js'
 import { addCorrection, findCorrection, getSetting, setSetting, setApiKey, getApiKey } from './store'
 
 let mainWindow: BrowserWindow | null = null
 let ws: WebSocket | null = null
 let isRecording = false
+
+function getVoxiJwt(): string | null {
+  // In production: stored via electron-store after purchase
+  const stored = getApiKey('voxi_jwt')
+  if (stored) return stored
+
+  // Dev fallback: generate a pro token signed with VOXI_SECRET_KEY env var
+  const secret = process.env['VOXI_SECRET_KEY']
+  if (!secret) return null
+  return jwt.sign({ userId: 'dev', plan: 'pro' }, secret, { expiresIn: '1h' })
+}
 
 function createWindow() {
   const { width, height } = screen.getPrimaryDisplay().workAreaSize
@@ -35,26 +47,58 @@ function createWindow() {
   } else {
     mainWindow.loadFile(join(__dirname, '../renderer/index.html'))
   }
+
+  if (process.env['NODE_ENV'] === 'development') {
+    mainWindow.webContents.openDevTools({ mode: 'detach' })
+  }
 }
 
 async function startPipeline() {
   if (isRecording) return
   isRecording = true
 
-  const { default: activeWindow } = await import('active-win')
-  const focused = await activeWindow()
-  const appName = focused?.owner?.name ?? 'Unknown'
+  // Show recording state immediately so the button animates right away
+  mainWindow?.webContents.send('status', 'recording')
 
-  ws = new WebSocket('ws://localhost:3001/transcribe')
+  const appName = 'Unknown'
+  const voxiJwt = getVoxiJwt()
+  const wsHeaders = voxiJwt ? { Authorization: `Bearer ${voxiJwt}` } : {}
+  ws = new WebSocket('ws://localhost:3001/transcribe', { headers: wsHeaders })
 
   ws.on('open', () => {
     ws!.send(JSON.stringify({ type: 'context', appName }))
-    mainWindow?.webContents.send('status', 'recording')
     mainWindow?.webContents.send('start-mic')
   })
 
   ws.on('message', async (raw: WebSocket.RawData) => {
-    const msg = JSON.parse(raw.toString()) as { type: string; data?: string }
+    const msg = JSON.parse(raw.toString()) as { type: string; data?: string; message?: string }
+    console.log('[main] ws message:', msg.type, msg.data?.slice(0, 80) ?? '')
+
+    if (msg.type === 'raw_transcript') {
+      const rawText = msg.data ?? ''
+      if (rawText.toLowerCase().startsWith('hey voxi')) {
+        const clipboardContent = clipboard.readText()
+        if (ws?.readyState === WebSocket.OPEN) {
+          ws.send(JSON.stringify({
+            type: 'command',
+            instruction: rawText,
+            clipboardContent
+          }))
+        }
+        // Keep WS open — waiting for token/done from command handler
+      }
+      return
+    }
+
+    if (msg.type === 'gate') {
+      mainWindow?.webContents.send('upgrade-gate')
+      mainWindow?.webContents.send('status', 'idle')
+      ws?.close()
+      ws = null
+      isRecording = false
+      return
+    }
+
     if (msg.type === 'token') {
       mainWindow?.webContents.send('status', 'processing')
       mainWindow?.webContents.send('streaming-preview', msg.data)
@@ -73,7 +117,8 @@ async function startPipeline() {
     }
   })
 
-  ws.on('error', () => {
+  ws.on('error', (err) => {
+    console.error('[ws] connection error:', err.message)
     mainWindow?.webContents.send('status', 'idle')
     ws = null
     isRecording = false
@@ -157,6 +202,11 @@ app.whenReady().then(() => {
     if (ws?.readyState === WebSocket.OPEN) {
       ws.send(JSON.stringify({ type: 'audio_chunk', data: b64 }))
     }
+  })
+
+  // Allow microphone access from the renderer process
+  session.defaultSession.setPermissionRequestHandler((_webContents, permission, callback) => {
+    callback(permission === 'media')
   })
 })
 
