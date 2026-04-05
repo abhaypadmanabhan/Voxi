@@ -1,8 +1,6 @@
 import { useEffect, useRef, useState } from 'react'
-import RecordingBubble from './components/RecordingBubble'
-import TranscriptToast from './components/TranscriptToast'
+import VoxiPill from './components/VoxiPill'
 import SettingsPanel from './components/SettingsPanel'
-import UpgradeToast from './components/UpgradeToast'
 
 declare global {
   interface Window {
@@ -15,7 +13,9 @@ declare global {
       onStopMic: (cb: () => void) => void
       sendAudioChunk: (b64: string) => void
       onStreamingPreview: (cb: (text: string) => void) => void
-      onGate: (cb: () => void) => void
+      onCorrectionLearned: (cb: () => void) => void
+      mouseEnterInteractive: () => void
+      mouseLeaveInteractive: () => void
     }
   }
 }
@@ -42,6 +42,7 @@ interface MicState {
   stream: MediaStream
   ctx: AudioContext
   worklet: AudioWorkletNode
+  analyser: AnalyserNode
   timer: ReturnType<typeof setInterval>
 }
 
@@ -50,8 +51,11 @@ export default function App() {
   const [streamingPreview, setStreamingPreview] = useState('')
   const [transcript, setTranscript] = useState('')
   const [showSettings, setShowSettings] = useState(false)
-  const [showUpgradeToast, setShowUpgradeToast] = useState(false)
+  const [amplitudes, setAmplitudes] = useState<number[]>(new Array(7).fill(0))
+  const [correctionLearned, setCorrectionLearned] = useState(false)
   const micRef = useRef<MicState | null>(null)
+  const analyserRef = useRef<AnalyserNode | null>(null)
+  const animFrameRef = useRef<number>(0)
 
   useEffect(() => {
     window.voxi.onStatus((s) => {
@@ -68,7 +72,10 @@ export default function App() {
     })
     window.voxi.onStartMic(() => startMic().catch((e) => console.error('[mic] failed:', e)))
     window.voxi.onStopMic(stopMic)
-    window.voxi.onGate(() => setShowUpgradeToast(true))
+    window.voxi.onCorrectionLearned(() => {
+      setCorrectionLearned(true)
+      setTimeout(() => setCorrectionLearned(false), 2500)
+    })
   }, [])
 
   async function startMic() {
@@ -86,6 +93,11 @@ export default function App() {
     await ctx.audioWorklet.addModule(URL.createObjectURL(workletBlob))
     const source = ctx.createMediaStreamSource(stream)
     const worklet = new AudioWorkletNode(ctx, 'pcm16-processor')
+    const analyser = ctx.createAnalyser()
+    analyser.fftSize = 64
+    analyser.smoothingTimeConstant = 0.6
+    source.connect(analyser)
+    analyser.connect(worklet)
     const buffers: Int16Array[] = []
     worklet.port.onmessage = (e: MessageEvent<Int16Array>) => buffers.push(e.data)
     const timer = setInterval(() => {
@@ -101,8 +113,9 @@ export default function App() {
       const b64 = btoa(String.fromCharCode(...new Uint8Array(merged.buffer)))
       window.voxi.sendAudioChunk(b64)
     }, 250)
-    source.connect(worklet)
-    micRef.current = { stream, ctx, worklet, timer }
+    analyserRef.current = analyser
+    animFrameRef.current = requestAnimationFrame(tickAmplitude)
+    micRef.current = { stream, ctx, worklet, analyser, timer }
     console.log('[mic] started')
   }
 
@@ -110,10 +123,23 @@ export default function App() {
     const m = micRef.current
     if (!m) return
     clearInterval(m.timer)
+    cancelAnimationFrame(animFrameRef.current)
+    analyserRef.current = null
+    setAmplitudes(new Array(7).fill(0))
+    m.analyser.disconnect()
     m.worklet.disconnect()
     m.ctx.close()
     m.stream.getTracks().forEach((t) => t.stop())
     micRef.current = null
+  }
+
+  function tickAmplitude() {
+    if (!analyserRef.current) return
+    const data = new Uint8Array(analyserRef.current.frequencyBinCount)
+    analyserRef.current.getByteFrequencyData(data)
+    const step = Math.floor(data.length / 7)
+    setAmplitudes(Array.from({ length: 7 }, (_, i) => data[i * step] / 255))
+    animFrameRef.current = requestAnimationFrame(tickAmplitude)
   }
 
   function handleClick() {
@@ -125,26 +151,27 @@ export default function App() {
   }
 
   return (
-    <>
-      <RecordingBubble
-        status={status}
-        onClick={handleClick}
-        onRightClick={() => setShowSettings(true)}
-      />
-      {(streamingPreview || transcript) && (
-        <TranscriptToast
-          text={streamingPreview || transcript}
-          isStreaming={status === 'processing'}
-          onDismiss={() => {
+    <div className="w-full h-full flex flex-col items-center justify-end pb-4 pointer-events-none">
+      <div
+        className="pointer-events-auto"
+        onMouseEnter={() => window.voxi.mouseEnterInteractive()}
+        onMouseLeave={() => window.voxi.mouseLeaveInteractive()}
+      >
+        <VoxiPill
+          status={status}
+          amplitudes={amplitudes}
+          streamingPreview={streamingPreview}
+          transcript={transcript}
+          correctionLearned={correctionLearned}
+          onClick={handleClick}
+          onRightClick={() => setShowSettings(true)}
+          onDismissTranscript={() => {
             setTranscript('')
             setStreamingPreview('')
           }}
         />
-      )}
+      </div>
       {showSettings && <SettingsPanel onClose={() => setShowSettings(false)} />}
-      {showUpgradeToast && (
-        <UpgradeToast onDismiss={() => setShowUpgradeToast(false)} />
-      )}
-    </>
+    </div>
   )
 }
