@@ -1,35 +1,26 @@
-import { app, BrowserWindow, clipboard, dialog, globalShortcut, ipcMain, screen, session, shell } from 'electron'
+import { app, BrowserWindow, clipboard, dialog, ipcMain, screen, session, shell } from 'electron'
 import { join } from 'path'
 import WebSocket = require('ws')
-import jwt from 'jsonwebtoken'
 import { Key, keyboard } from '@nut-tree-fork/nut-js'
-import { addCorrection, findCorrection, getSetting, setSetting, setApiKey, getApiKey } from './store'
+import { uIOhook, UiohookKey } from 'uiohook-napi'
+import levenshtein from 'fast-levenshtein'
+import { addCorrection, findCorrection, getRecentCorrections, getSetting, setSetting, setApiKey, getApiKey } from './store'
 
 let mainWindow: BrowserWindow | null = null
 let ws: WebSocket | null = null
 let isRecording = false
-
-function getVoxiJwt(): string | null {
-  // In production: stored via electron-store after purchase
-  const stored = getApiKey('voxi_jwt')
-  if (stored) return stored
-
-  // Dev fallback: generate a pro token signed with VOXI_SECRET_KEY env var
-  const secret = process.env['VOXI_SECRET_KEY']
-  if (!secret) return null
-  return jwt.sign({ userId: 'dev', plan: 'pro' }, secret, { expiresIn: '1h' })
-}
+let cmd0Held = false
 
 function createWindow() {
   const { width, height } = screen.getPrimaryDisplay().workAreaSize
-  const SIZE = 80
-  const MARGIN = 24
+  const WIN_W = 420
+  const WIN_H = 300
 
   mainWindow = new BrowserWindow({
-    width: SIZE,
-    height: SIZE,
-    x: width - SIZE - MARGIN,
-    y: height - SIZE - MARGIN,
+    width: WIN_W,
+    height: WIN_H,
+    x: Math.round((width - WIN_W) / 2),
+    y: height - WIN_H,
     frame: false,
     transparent: true,
     alwaysOnTop: true,
@@ -41,6 +32,8 @@ function createWindow() {
       nodeIntegration: false,
     },
   })
+
+  mainWindow.setIgnoreMouseEvents(true, { forward: true })
 
   if (process.env['ELECTRON_RENDERER_URL']) {
     mainWindow.loadURL(process.env['ELECTRON_RENDERER_URL'])
@@ -57,16 +50,14 @@ async function startPipeline() {
   if (isRecording) return
   isRecording = true
 
-  // Show recording state immediately so the button animates right away
   mainWindow?.webContents.send('status', 'recording')
 
   const appName = 'Unknown'
-  const voxiJwt = getVoxiJwt()
-  const wsHeaders = voxiJwt ? { Authorization: `Bearer ${voxiJwt}` } : {}
-  ws = new WebSocket('ws://localhost:3001/transcribe', { headers: wsHeaders })
+  ws = new WebSocket('ws://localhost:3001/transcribe')
 
   ws.on('open', () => {
-    ws!.send(JSON.stringify({ type: 'context', appName }))
+    const corrections = getRecentCorrections(10)
+    ws!.send(JSON.stringify({ type: 'context', appName, corrections }))
     mainWindow?.webContents.send('start-mic')
   })
 
@@ -85,17 +76,7 @@ async function startPipeline() {
             clipboardContent
           }))
         }
-        // Keep WS open — waiting for token/done from command handler
       }
-      return
-    }
-
-    if (msg.type === 'gate') {
-      mainWindow?.webContents.send('upgrade-gate')
-      mainWindow?.webContents.send('status', 'idle')
-      ws?.close()
-      ws = null
-      isRecording = false
       return
     }
 
@@ -136,20 +117,37 @@ function stopPipeline() {
 
 const CODE_APPS = new Set(['terminal', 'code', 'cursor'])
 
+function startCorrectionPolling(injected: string, appName: string): void {
+  if (injected.length < 5) return
+  let polls = 0
+  let lastClip = ''
+  const id = setInterval(() => {
+    if (++polls > 30) {
+      clearInterval(id)
+      return
+    }
+    const clip = clipboard.readText().trim()
+    if (!clip || clip === lastClip || clip === injected) return
+    lastClip = clip
+    const maxLen = Math.max(injected.length, clip.length)
+    const similarity = 1 - levenshtein.get(injected, clip) / maxLen
+    if (similarity > 0.3 && similarity < 1.0) {
+      clearInterval(id)
+      addCorrection(injected, clip, appName, similarity)
+      mainWindow?.webContents.send('correction-learned')
+    }
+  }, 500)
+}
+
 async function injectText(text: string, appName: string): Promise<void> {
-  // Apply any learned user corrections first
   const corrected = findCorrection(text) ?? text
 
   try {
-    // For normal apps (not code editors/terminals), select-all first
-    // so the dictated text replaces any stale selection.
-    // Skip for coding tools to avoid clobbering existing work.
     if (!CODE_APPS.has(appName.toLowerCase())) {
       await keyboard.pressKey(Key.LeftCmd, Key.A)
       await keyboard.releaseKey(Key.LeftCmd, Key.A)
     }
 
-    // Let focus fully settle before typing
     await new Promise<void>((resolve) => setTimeout(resolve, 50))
 
     await keyboard.type(corrected)
@@ -172,25 +170,29 @@ async function injectText(text: string, appName: string): Promise<void> {
     return
   }
 
-  // 3-second clipboard diff: if user edited the injected text, store correction
-  setTimeout(() => {
-    const clipped = clipboard.readText()
-    if (clipped && clipped !== corrected) {
-      addCorrection(corrected, clipped, appName)
-    }
-  }, 3000)
+  startCorrectionPolling(corrected, appName)
 }
 
 app.whenReady().then(() => {
   createWindow()
 
-  globalShortcut.register('CommandOrControl+Shift+V', () => {
-    if (isRecording) {
-      stopPipeline()
-    } else {
-      startPipeline()
+  uIOhook.on('keydown', (e) => {
+    if (e.keycode === UiohookKey.Num0 && (e.metaKey || e.ctrlKey)) {
+      if (!cmd0Held && !isRecording) {
+        cmd0Held = true
+        startPipeline()
+      }
     }
   })
+  uIOhook.on('keyup', (e) => {
+    if (e.keycode === UiohookKey.Num0) {
+      if (cmd0Held && isRecording) {
+        cmd0Held = false
+        stopPipeline()
+      }
+    }
+  })
+  uIOhook.start()
 
   ipcMain.on('start-recording', () => startPipeline())
   ipcMain.on('stop-recording', () => stopPipeline())
@@ -204,13 +206,15 @@ app.whenReady().then(() => {
     }
   })
 
-  // Allow microphone access from the renderer process
+  ipcMain.on('mouse-enter-interactive', () => mainWindow?.setIgnoreMouseEvents(false))
+  ipcMain.on('mouse-leave-interactive', () => mainWindow?.setIgnoreMouseEvents(true, { forward: true }))
+
   session.defaultSession.setPermissionRequestHandler((_webContents, permission, callback) => {
     callback(permission === 'media')
   })
 })
 
-app.on('will-quit', () => globalShortcut.unregisterAll())
+app.on('will-quit', () => uIOhook.stop())
 
 app.on('window-all-closed', () => {
   if (process.platform !== 'darwin') app.quit()
