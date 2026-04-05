@@ -6,7 +6,7 @@ import WebSocket from 'ws';
 
 // We need to mock 'transcribeWithMiniMax' and 'streamFormattedText'
 vi.mock('../src/asr', () => ({
-    transcribeWithMiniMax: vi.fn().mockResolvedValue('mock transcript')
+    transcribeAudio: vi.fn().mockResolvedValue('mock transcript')
 }));
 
 vi.mock('../src/formatter', () => ({
@@ -109,11 +109,12 @@ describe('ws-handler route', () => {
                     messages.push(msg);
 
                     if (msg.type === 'done') {
-                        // We should have received 2 tokens and 1 done message
-                        expect(messages).toHaveLength(3);
-                        expect(messages[0]).toEqual({ type: 'token', data: 'hello' });
-                        expect(messages[1]).toEqual({ type: 'token', data: ' world' });
-                        expect(messages[2]).toEqual({ type: 'done', data: 'hello world' });
+                        // We should have received raw_transcript, 2 tokens and 1 done message
+                        expect(messages).toHaveLength(4);
+                        expect(messages[0]).toEqual({ type: 'raw_transcript', data: 'mock transcript' });
+                        expect(messages[1]).toEqual({ type: 'token', data: 'hello' });
+                        expect(messages[2]).toEqual({ type: 'token', data: ' world' });
+                        expect(messages[3]).toEqual({ type: 'done', data: 'hello world' });
 
                         ws.close();
                         resolve();
