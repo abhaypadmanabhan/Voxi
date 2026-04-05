@@ -24,7 +24,17 @@ function openDb(): Database.Database {
       key   TEXT PRIMARY KEY,
       value TEXT NOT NULL
     );
+    CREATE TABLE IF NOT EXISTS vocabulary (
+      word       TEXT PRIMARY KEY,
+      correction TEXT NOT NULL,
+      count      INTEGER DEFAULT 1
+    );
   `)
+  // Migrate: add confidence column if missing
+  const cols = db.prepare('PRAGMA table_info(corrections)').all() as Array<{ name: string }>
+  if (!cols.some(c => c.name === 'confidence')) {
+    db.exec('ALTER TABLE corrections ADD COLUMN confidence REAL DEFAULT 1.0')
+  }
   return db
 }
 
@@ -61,10 +71,16 @@ export function decrypt(ciphertext: string): string {
 
 // ── Corrections ─────────────────────────────────────────────────────────────
 
-export function addCorrection(raw: string, corrected: string, app: string): void {
+export function addCorrection(raw: string, corrected: string, app: string, confidence = 1.0): void {
   db.prepare(
-    'INSERT INTO corrections (raw, corrected, app) VALUES (?, ?, ?)',
-  ).run(raw, corrected, app)
+    'INSERT INTO corrections (raw, corrected, app, confidence) VALUES (?, ?, ?, ?)',
+  ).run(raw, corrected, app, confidence)
+}
+
+export function getRecentCorrections(limit = 10): Array<{ raw: string; corrected: string }> {
+  return db
+    .prepare('SELECT raw, corrected FROM corrections ORDER BY created_at DESC LIMIT ?')
+    .all(limit) as Array<{ raw: string; corrected: string }>
 }
 
 /** Returns the most recent correction for a similar raw string, or null. */
