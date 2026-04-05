@@ -1,6 +1,5 @@
 import type { FastifyInstance } from 'fastify';
 import type WebSocket from 'ws';
-import jwt from 'jsonwebtoken';
 import { transcribeAudio } from './asr.js';
 import { handleCommand } from './command.js';
 import { streamFormattedText } from './formatter.js';
@@ -28,26 +27,12 @@ function assertContext(state: WsSessionState): string {
 }
 
 export async function registerTranscribeWsRoute(fastify: FastifyInstance): Promise<void> {
-  fastify.get('/transcribe', { websocket: true }, (socket, request) => {
-    // Decode JWT from Authorization header (best-effort; null = not authenticated)
-    let plan: 'free' | 'pro' | null = null;
-    const authHeader = (request.headers.authorization as string | undefined) ?? '';
-    const token = authHeader.startsWith('Bearer ') ? authHeader.slice(7) : '';
-    if (token) {
-      try {
-        const secret = process.env.VOXI_SECRET_KEY ?? 'dev-secret';
-        const payload = jwt.verify(token, secret) as { userId?: string; plan?: string };
-        plan = payload.plan === 'pro' ? 'pro' : 'free';
-      } catch {
-        plan = null; // invalid token → treat as unauthenticated
-      }
-    }
-
+  fastify.get('/transcribe', { websocket: true }, (socket, _request) => {
     const state: WsSessionState = {
       appName: undefined,
       isContextSet: false,
       audioChunks: [],
-      plan
+      corrections: []
     };
 
     socket.on('message', async (rawData: WebSocket.RawData) => {
@@ -76,6 +61,7 @@ export async function registerTranscribeWsRoute(fastify: FastifyInstance): Promi
         if (message.type === 'context') {
           state.appName = message.appName;
           state.isContextSet = true;
+          state.corrections = message.corrections ?? [];
           console.log(`[ws] context set, appName=${message.appName}`);
           return;
         }
@@ -92,12 +78,6 @@ export async function registerTranscribeWsRoute(fastify: FastifyInstance): Promi
         }
 
         if (message.type === 'command') {
-          // Feature gate: only pro users can use commands
-          if (state.plan !== 'pro') {
-            sendMessage(socket, { type: 'gate', message: 'upgrade_required' });
-            return;
-          }
-
           const fullText = await handleCommand(
             {
               instruction: message.instruction,
@@ -136,6 +116,7 @@ export async function registerTranscribeWsRoute(fastify: FastifyInstance): Promi
           const formatted = await streamFormattedText({
             rawTranscript: transcript,
             appName: state.appName!,
+            corrections: state.corrections,
             onToken: (tok) => {
               sendMessage(socket, { type: 'token', data: tok });
             }
