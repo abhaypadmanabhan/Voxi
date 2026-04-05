@@ -2,7 +2,11 @@ import { z } from 'zod';
 
 export const ContextMessageSchema = z.object({
   type: z.literal('context'),
-  appName: z.string().min(1)
+  appName: z.string().min(1),
+  corrections: z.array(z.object({
+    raw: z.string(),
+    corrected: z.string()
+  })).optional()
 });
 
 export const AudioChunkMessageSchema = z.object({
@@ -38,7 +42,6 @@ export type ServerMessage =
   | { type: 'done'; data: string }
   | { type: 'error'; data: string }
   | { type: 'raw_transcript'; data: string }
-  | { type: 'gate'; message: string }
   | {
       type: 'command_result';
       data: {
@@ -53,5 +56,5 @@ export interface WsSessionState {
   appName?: string;
   isContextSet: boolean;
   audioChunks: Buffer[];
-  plan: 'free' | 'pro' | null;
+  corrections: Array<{ raw: string; corrected: string }>;
 }
