@@ -26,3 +26,6 @@ release
 *.njsproj
 *.sln
 *.sw?
+
+# Git worktrees
+.worktrees
