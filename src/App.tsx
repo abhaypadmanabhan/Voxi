@@ -16,6 +16,8 @@ declare global {
       onCorrectionLearned: (cb: () => void) => void
       mouseEnterInteractive: () => void
       mouseLeaveInteractive: () => void
+      getSetting: (key: string) => Promise<string | null>
+      setSetting: (key: string, value: string) => Promise<void>
     }
   }
 }

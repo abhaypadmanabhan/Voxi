@@ -14,9 +14,14 @@ export default defineConfig({
   preload: {
     plugins: [externalizeDepsPlugin()],
     build: {
+      lib: {
+        entry: resolve(__dirname, 'electron/preload.ts'),
+        formats: ['cjs'],
+        fileName: () => 'index.js',
+      },
       rollupOptions: {
-        input: {
-          index: resolve(__dirname, 'electron/preload.ts'),
+        output: {
+          entryFileNames: 'index.js',
         },
       },
     },

@@ -62,7 +62,8 @@ export async function registerTranscribeWsRoute(fastify: FastifyInstance): Promi
           state.appName = message.appName;
           state.isContextSet = true;
           state.corrections = message.corrections ?? [];
-          console.log(`[ws] context set, appName=${message.appName}`);
+          state.skipFormatter = message.skipFormatter ?? false;
+          console.log(`[ws] context set, appName=${message.appName}, skipFormatter=${state.skipFormatter}`);
           return;
         }
 
@@ -97,12 +98,13 @@ export async function registerTranscribeWsRoute(fastify: FastifyInstance): Promi
             throw new Error('No audio chunks received before end_stream');
           }
 
+          const t0 = Date.now();
           const fullAudio = Buffer.concat(state.audioChunks);
           state.audioChunks = [];
 
-          console.log(`[ws] calling Groq Whisper, audio size=${fullAudio.length} bytes`);
+          console.log(`[ws] STT starting, audio size=${fullAudio.length} bytes`);
           const transcript = await transcribeAudio(fullAudio.toString('base64'));
-          console.log(`[ws] transcript: "${transcript}"`);
+          console.log(`[timing] STT: ${Date.now() - t0}ms — "${transcript}"`);
 
           // Send raw transcript to Electron for "hey voxi" detection
           sendMessage(socket, { type: 'raw_transcript', data: transcript });
@@ -112,15 +114,30 @@ export async function registerTranscribeWsRoute(fastify: FastifyInstance): Promi
             return;
           }
 
+          // If formatter is disabled, send raw transcript directly
+          if (state.skipFormatter || !transcript.trim()) {
+            console.log(`[timing] LLM skipped (skipFormatter=${state.skipFormatter})`);
+            sendMessage(socket, { type: 'done', data: transcript });
+            return;
+          }
+
           // Normal dictation: format and stream
+          const t1 = Date.now();
+          let firstToken = true;
           const formatted = await streamFormattedText({
             rawTranscript: transcript,
             appName: state.appName!,
             corrections: state.corrections,
             onToken: (tok) => {
+              if (firstToken) {
+                console.log(`[timing] LLM first token: ${Date.now() - t1}ms`);
+                firstToken = false;
+              }
               sendMessage(socket, { type: 'token', data: tok });
             }
           });
+          console.log(`[timing] LLM total: ${Date.now() - t1}ms`);
+          console.log(`[timing] end-to-end: ${Date.now() - t0}ms`);
 
           sendMessage(socket, { type: 'done', data: formatted });
           return;

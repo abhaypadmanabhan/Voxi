@@ -6,7 +6,8 @@ export const ContextMessageSchema = z.object({
   corrections: z.array(z.object({
     raw: z.string(),
     corrected: z.string()
-  })).optional()
+  })).optional(),
+  skipFormatter: z.boolean().optional()
 });
 
 export const AudioChunkMessageSchema = z.object({
@@ -57,4 +58,5 @@ export interface WsSessionState {
   isContextSet: boolean;
   audioChunks: Buffer[];
   corrections: Array<{ raw: string; corrected: string }>;
+  skipFormatter?: boolean;
 }

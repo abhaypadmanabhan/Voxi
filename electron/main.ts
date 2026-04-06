@@ -1,15 +1,16 @@
-import { app, BrowserWindow, clipboard, dialog, ipcMain, screen, session, shell } from 'electron'
+import { app, BrowserWindow, clipboard, dialog, globalShortcut, ipcMain, screen, session, shell } from 'electron'
 import { join } from 'path'
 import WebSocket = require('ws')
 import { Key, keyboard } from '@nut-tree-fork/nut-js'
-import { uIOhook, UiohookKey } from 'uiohook-napi'
 import levenshtein from 'fast-levenshtein'
-import { addCorrection, findCorrection, getRecentCorrections, getSetting, setSetting, setApiKey, getApiKey } from './store'
+import { addCorrection, clearCorrections, findCorrection, getRecentCorrections, getSetting, setSetting, setApiKey, getApiKey } from './store'
 
 let mainWindow: BrowserWindow | null = null
 let ws: WebSocket | null = null
 let isRecording = false
-let cmd0Held = false
+let autoStopTimer: ReturnType<typeof setTimeout> | null = null
+
+const MAX_RECORDING_MS = 30_000
 
 function createWindow() {
   const { width, height } = screen.getPrimaryDisplay().workAreaSize
@@ -50,6 +51,11 @@ async function startPipeline() {
   if (isRecording) return
   isRecording = true
 
+  autoStopTimer = setTimeout(() => {
+    console.log('[main] auto-stop: max recording time reached')
+    stopPipeline()
+  }, MAX_RECORDING_MS)
+
   mainWindow?.webContents.send('status', 'recording')
 
   const appName = 'Unknown'
@@ -57,7 +63,8 @@ async function startPipeline() {
 
   ws.on('open', () => {
     const corrections = getRecentCorrections(10)
-    ws!.send(JSON.stringify({ type: 'context', appName, corrections }))
+    const skipFormatter = getSetting('use_llm_formatter') === 'false'
+    ws!.send(JSON.stringify({ type: 'context', appName, corrections, skipFormatter }))
     mainWindow?.webContents.send('start-mic')
   })
 
@@ -108,11 +115,13 @@ async function startPipeline() {
 
 function stopPipeline() {
   if (!isRecording) return
+  isRecording = false
+  if (autoStopTimer) { clearTimeout(autoStopTimer); autoStopTimer = null }
+  mainWindow?.webContents.send('status', 'processing')
   mainWindow?.webContents.send('stop-mic')
   if (ws?.readyState === WebSocket.OPEN) {
     ws.send(JSON.stringify({ type: 'end_stream' }))
   }
-  // isRecording stays true until ws 'done' or 'error' resets it
 }
 
 const CODE_APPS = new Set(['terminal', 'code', 'cursor'])
@@ -176,23 +185,10 @@ async function injectText(text: string, appName: string): Promise<void> {
 app.whenReady().then(() => {
   createWindow()
 
-  uIOhook.on('keydown', (e) => {
-    if (e.keycode === UiohookKey.Num0 && (e.metaKey || e.ctrlKey)) {
-      if (!cmd0Held && !isRecording) {
-        cmd0Held = true
-        startPipeline()
-      }
-    }
+  globalShortcut.register('CommandOrControl+0', () => {
+    if (isRecording) stopPipeline()
+    else startPipeline()
   })
-  uIOhook.on('keyup', (e) => {
-    if (e.keycode === UiohookKey.Num0) {
-      if (cmd0Held && isRecording) {
-        cmd0Held = false
-        stopPipeline()
-      }
-    }
-  })
-  uIOhook.start()
 
   ipcMain.on('start-recording', () => startPipeline())
   ipcMain.on('stop-recording', () => stopPipeline())
@@ -200,6 +196,10 @@ app.whenReady().then(() => {
   ipcMain.handle('set-setting', (_e, key: string, value: string) => setSetting(key, value))
   ipcMain.handle('set-api-key', (_e, name: string, value: string) => setApiKey(name, value))
   ipcMain.handle('get-api-key', (_e, name: string) => getApiKey(name))
+  ipcMain.handle('clear-corrections', () => clearCorrections())
+
+  // Clear stale ghost corrections on startup
+  clearCorrections()
   ipcMain.on('audio-chunk', (_e, b64: string) => {
     if (ws?.readyState === WebSocket.OPEN) {
       ws.send(JSON.stringify({ type: 'audio_chunk', data: b64 }))
@@ -214,7 +214,7 @@ app.whenReady().then(() => {
   })
 })
 
-app.on('will-quit', () => uIOhook.stop())
+app.on('will-quit', () => globalShortcut.unregisterAll())
 
 app.on('window-all-closed', () => {
   if (process.platform !== 'darwin') app.quit()

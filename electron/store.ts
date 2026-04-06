@@ -1,6 +1,7 @@
 import Database from 'better-sqlite3'
 import crypto from 'crypto'
-import { machineIdSync } from 'node-machine-id'
+import nodeMachineId from 'node-machine-id'
+const { machineIdSync } = nodeMachineId
 import { homedir } from 'os'
 import { mkdirSync } from 'fs'
 import { join } from 'path'
@@ -83,17 +84,21 @@ export function getRecentCorrections(limit = 10): Array<{ raw: string; corrected
     .all(limit) as Array<{ raw: string; corrected: string }>
 }
 
-/** Returns the most recent correction for a similar raw string, or null. */
+/** Returns the most recent correction for an exact raw string, or null. */
 export function findCorrection(raw: string): string | null {
   const row = db
     .prepare(
       `SELECT corrected FROM corrections
-       WHERE raw LIKE ?
+       WHERE raw = ?
        ORDER BY created_at DESC
        LIMIT 1`,
     )
-    .get(`%${raw}%`) as { corrected: string } | undefined
+    .get(raw) as { corrected: string } | undefined
   return row?.corrected ?? null
+}
+
+export function clearCorrections(): void {
+  db.prepare('DELETE FROM corrections').run()
 }
 
 // ── Settings ─────────────────────────────────────────────────────────────────

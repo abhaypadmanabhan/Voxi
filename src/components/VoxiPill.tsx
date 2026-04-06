@@ -143,6 +143,7 @@ export default function VoxiPill({
             >
               <Mic size={16} strokeWidth={2} />
               <span className="text-[13px] font-medium tracking-wide">Voxi</span>
+              <kbd className="text-[10px] text-white/30 font-mono ml-1">⌘0</kbd>
             </motion.div>
           )}
 

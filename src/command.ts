@@ -63,7 +63,7 @@ export async function handleCommand(
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({
-        model: 'gemma3',
+        model: 'gemma4:e4b',
         stream: true,
         messages: [
           { role: 'system', content: system },

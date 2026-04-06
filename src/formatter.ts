@@ -46,7 +46,7 @@ export async function streamFormattedText(params: {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({
-        model: 'gemma3',
+        model: 'gemma4:e4b',
         stream: true,
         messages: [
           {
