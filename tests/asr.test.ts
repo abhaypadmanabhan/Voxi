@@ -24,11 +24,8 @@ describe('transcribeAudio (Moonshine)', () => {
     const result = await transcribeAudio(base64)
     expect(result).toBe('hello world')
 
-    // Verify pipeline was called with Float32Array and correct sample rate
-    expect(mockPipelineFn).toHaveBeenCalledWith(
-      expect.any(Float32Array),
-      { sampling_rate: 16000 }
-    )
+    // Pipeline is called with raw Float32Array (transformers.js v4 infers 16kHz from processor)
+    expect(mockPipelineFn).toHaveBeenCalledWith(expect.any(Float32Array))
   })
 
   it('trims whitespace from transcript', async () => {

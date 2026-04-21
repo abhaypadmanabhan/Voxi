@@ -3,6 +3,7 @@ import type WebSocket from 'ws';
 import { transcribeAudio } from './asr.js';
 import { handleCommand } from './command.js';
 import { streamFormattedText } from './formatter.js';
+import { ruleFormat } from './rule-formatter.js';
 import { ClientMessageSchema, type ServerMessage, type WsSessionState } from './types.js';
 
 function sendMessage(socket: WebSocket, payload: ServerMessage): void {
@@ -114,10 +115,17 @@ export async function registerTranscribeWsRoute(fastify: FastifyInstance): Promi
             return;
           }
 
-          // If formatter is disabled, send raw transcript directly
+          // Raw/fast mode: deterministic rule-based formatter, no LLM. Default path.
           if (state.skipFormatter || !transcript.trim()) {
-            console.log(`[timing] LLM skipped (skipFormatter=${state.skipFormatter})`);
-            sendMessage(socket, { type: 'done', data: transcript });
+            const tRule = Date.now();
+            const formatted = ruleFormat({
+              rawTranscript: transcript,
+              appName: state.appName!,
+              corrections: state.corrections,
+            });
+            console.log(`[timing] rule-format: ${Date.now() - tRule}ms (skipFormatter=${state.skipFormatter})`);
+            console.log(`[timing] end-to-end: ${Date.now() - t0}ms`);
+            sendMessage(socket, { type: 'done', data: formatted });
             return;
           }
 

@@ -24,6 +24,26 @@ declare global {
 
 type Status = 'idle' | 'recording' | 'processing'
 
+// Short sine-wave cue so user knows when mic engaged / released (bubble may be hidden)
+function playCue(freq: number, durationMs: number): void {
+  try {
+    const ctx = new AudioContext()
+    const osc = ctx.createOscillator()
+    const gain = ctx.createGain()
+    osc.type = 'sine'
+    osc.frequency.value = freq
+    gain.gain.setValueAtTime(0.0001, ctx.currentTime)
+    gain.gain.exponentialRampToValueAtTime(0.15, ctx.currentTime + 0.01)
+    gain.gain.exponentialRampToValueAtTime(0.0001, ctx.currentTime + durationMs / 1000)
+    osc.connect(gain).connect(ctx.destination)
+    osc.start()
+    osc.stop(ctx.currentTime + durationMs / 1000)
+    setTimeout(() => ctx.close(), durationMs + 100)
+  } catch {
+    // Audio blocked before user gesture; ignore
+  }
+}
+
 const WORKLET_CODE = `
 class PCM16Processor extends AudioWorkletProcessor {
   process(inputs) {
@@ -62,7 +82,14 @@ export default function App() {
   useEffect(() => {
     window.voxi.onStatus((s) => {
       if (s === 'idle' || s === 'recording' || s === 'processing') {
-        setStatus(s)
+        setStatus((prev) => {
+          if (s !== prev) {
+            if (s === 'recording') playCue(880, 120)
+            else if (s === 'processing') playCue(660, 80)
+            else if (s === 'idle') playCue(523, 140)
+          }
+          return s
+        })
       }
     })
     window.voxi.onTranscript((t) => {

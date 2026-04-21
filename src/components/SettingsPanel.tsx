@@ -6,11 +6,11 @@ interface Props {
 }
 
 export default function SettingsPanel({ onClose }: Props) {
-  const [useLlm, setUseLlm] = useState(true)
+  const [useLlm, setUseLlm] = useState(false)
 
   useEffect(() => {
     window.voxi.getSetting('use_llm_formatter').then((val) => {
-      setUseLlm(val !== 'false')
+      setUseLlm(val === 'true')
     })
   }, [])
 

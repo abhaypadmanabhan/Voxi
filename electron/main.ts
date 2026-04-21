@@ -63,7 +63,8 @@ async function startPipeline() {
 
   ws.on('open', () => {
     const corrections = getRecentCorrections(10)
-    const skipFormatter = getSetting('use_llm_formatter') === 'false'
+    // Default OFF for speed — LLM formatter is opt-in via settings
+    const skipFormatter = getSetting('use_llm_formatter') !== 'true'
     ws!.send(JSON.stringify({ type: 'context', appName, corrections, skipFormatter }))
     mainWindow?.webContents.send('start-mic')
   })
@@ -124,14 +125,13 @@ function stopPipeline() {
   }
 }
 
-const CODE_APPS = new Set(['terminal', 'code', 'cursor'])
-
 function startCorrectionPolling(injected: string, appName: string): void {
   if (injected.length < 5) return
   let polls = 0
   let lastClip = ''
+  // Poll for up to 3s (6 × 500ms) — cuts background CPU vs 15s and unblocks rapid successive dictations
   const id = setInterval(() => {
-    if (++polls > 30) {
+    if (++polls > 6) {
       clearInterval(id)
       return
     }
@@ -150,16 +150,26 @@ function startCorrectionPolling(injected: string, appName: string): void {
 
 async function injectText(text: string, appName: string): Promise<void> {
   const corrected = findCorrection(text) ?? text
+  if (!corrected.trim()) {
+    console.log('[inject] skip — empty transcript')
+    return
+  }
 
   try {
-    if (!CODE_APPS.has(appName.toLowerCase())) {
-      await keyboard.pressKey(Key.LeftCmd, Key.A)
-      await keyboard.releaseKey(Key.LeftCmd, Key.A)
-    }
+    const prevClipboard = clipboard.readText()
+    clipboard.writeText(corrected)
 
-    await new Promise<void>((resolve) => setTimeout(resolve, 50))
+    // Delay so clipboard write fully propagates before paste keystroke
+    await new Promise<void>((resolve) => setTimeout(resolve, 40))
 
-    await keyboard.type(corrected)
+    // Insert at cursor — no select-all. Dictation is insertion, not replacement.
+    await keyboard.pressKey(Key.LeftCmd, Key.V)
+    await keyboard.releaseKey(Key.LeftCmd, Key.V)
+
+    // Restore previous clipboard after paste has settled
+    setTimeout(() => {
+      if (prevClipboard) clipboard.writeText(prevClipboard)
+    }, 500)
   } catch (err) {
     console.error('[nut-js] injection failed:', err)
     const { response } = await dialog.showMessageBox({

@@ -6,26 +6,37 @@ let _pipe: AutomaticSpeechRecognitionPipeline | null = null
 
 async function getPipeline(): Promise<AutomaticSpeechRecognitionPipeline> {
   if (_pipe) return _pipe
-  console.log('[asr] loading Moonshine model (first run: downloads ~200MB)...')
+  console.log('[asr] loading Whisper-small.en quantized (first run: ~90MB)...')
   _pipe = await pipeline(
     'automatic-speech-recognition',
-    'onnx-community/moonshine-base-ONNX',
-    { dtype: 'fp32' }
+    'Xenova/whisper-small.en',
+    { dtype: { encoder_model: 'fp32', decoder_model_merged: 'q8' } } as any
   ) as AutomaticSpeechRecognitionPipeline
-  console.log('[asr] Moonshine ready')
+  console.log('[asr] Whisper ready')
   return _pipe
 }
 
 export async function initMoonshine(): Promise<void> {
-  await getPipeline()
+  const pipe = await getPipeline()
+  // Warm graph with 1s silence — first real call otherwise eats compile/allocation cost
+  const tWarm = Date.now()
+  const silence = new Float32Array(16000)
+  try {
+    const warmResult = await pipe(silence) as { text?: string }
+    console.log(`[asr] warmup inference: ${Date.now() - tWarm}ms, text="${warmResult?.text ?? ''}"`)
+  } catch (err) {
+    console.warn('[asr] warmup inference failed (non-fatal):', err)
+  }
 }
 
-// Convert Int16 PCM → Float32 normalized [-1, 1]
+// Convert Int16 PCM → Float32 normalized [-1, 1].
+// Uses DataView to avoid TypedArray byteOffset alignment constraints on Node Buffer pool.
 function pcm16ToFloat32(pcmBuffer: Buffer): Float32Array {
-  const int16 = new Int16Array(pcmBuffer.buffer, pcmBuffer.byteOffset, pcmBuffer.byteLength / 2)
-  const float32 = new Float32Array(int16.length)
-  for (let i = 0; i < int16.length; i++) {
-    float32[i] = int16[i] / 32768.0
+  const sampleCount = Math.floor(pcmBuffer.byteLength / 2)
+  const view = new DataView(pcmBuffer.buffer, pcmBuffer.byteOffset, sampleCount * 2)
+  const float32 = new Float32Array(sampleCount)
+  for (let i = 0; i < sampleCount; i++) {
+    float32[i] = view.getInt16(i * 2, true) / 32768.0
   }
   return float32
 }
@@ -59,6 +70,35 @@ function deRepeat(text: string): string {
 export async function transcribeAudio(base64Pcm: string): Promise<string> {
   const pipe = await getPipeline()
   const float32 = pcm16ToFloat32(Buffer.from(base64Pcm, 'base64'))
-  const result = await pipe(float32, { sampling_rate: 16000 }) as { text: string }
-  return deRepeat(result.text.trim())
+
+  // Quick amplitude check — detect silent/dead mic
+  let peak = 0
+  let rmsAccum = 0
+  for (let i = 0; i < float32.length; i++) {
+    const v = Math.abs(float32[i])
+    if (v > peak) peak = v
+    rmsAccum += v * v
+  }
+  const rms = Math.sqrt(rmsAccum / float32.length)
+  console.log(`[asr] audio peak=${peak.toFixed(3)} rms=${rms.toFixed(4)} samples=${float32.length} dur=${(float32.length / 16000).toFixed(2)}s`)
+  if (peak < 0.002) {
+    console.warn('[asr] audio effectively silent — check mic permission / input device')
+    return ''
+  }
+
+  // transformers.js v4 ASR pipeline expects raw Float32Array (mono 16kHz).
+  // Second options arg is generation config — passing sampling_rate here is a no-op.
+  // Audio is already 16kHz from renderer AudioContext, so no resampling needed.
+  const tInfer = Date.now()
+  const result = await pipe(float32) as { text: string } | Array<{ text: string }>
+  const resultObj = Array.isArray(result) ? result[0] : result
+  console.log(`[asr] inference ${Date.now() - tInfer}ms, keys=${Object.keys(resultObj ?? {}).join(',')}, text="${resultObj?.text ?? 'undefined'}"`)
+  const raw = (resultObj?.text ?? '').trim()
+  const cleaned = deRepeat(raw)
+  if (raw && !cleaned) {
+    console.warn(`[asr] deRepeat zeroed output. raw="${raw.slice(0, 120)}" samples=${float32.length}`)
+  } else if (!raw) {
+    console.warn(`[asr] ASR returned empty. samples=${float32.length} duration=${(float32.length / 16000).toFixed(2)}s`)
+  }
+  return cleaned
 }
