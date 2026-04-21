@@ -5,8 +5,9 @@ import { registerTranscribeWsRoute } from '../src/ws-handler';
 import WebSocket from 'ws';
 
 // We need to mock 'transcribeWithMiniMax' and 'streamFormattedText'
-vi.mock('../src/asr', () => ({
-    transcribeAudio: vi.fn().mockResolvedValue('mock transcript')
+vi.mock('../src/asr-wcpp', () => ({
+    transcribeAudio: vi.fn().mockResolvedValue('mock transcript'),
+    transcribePartial: vi.fn().mockResolvedValue('')
 }));
 
 vi.mock('../src/formatter', () => ({

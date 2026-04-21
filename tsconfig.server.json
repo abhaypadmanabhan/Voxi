@@ -15,6 +15,9 @@
     "src/server.ts",
     "src/ws-handler.ts",
     "src/asr.ts",
+    "src/asr-wcpp.ts",
+    "src/model-loader.ts",
+    "src/rule-formatter.ts",
     "src/formatter.ts",
     "src/command.ts",
     "src/types.ts"

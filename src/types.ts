@@ -43,6 +43,7 @@ export type ServerMessage =
   | { type: 'done'; data: string }
   | { type: 'error'; data: string }
   | { type: 'raw_transcript'; data: string }
+  | { type: 'partial'; data: string }
   | {
       type: 'command_result';
       data: {
@@ -59,4 +60,6 @@ export interface WsSessionState {
   audioChunks: Buffer[];
   corrections: Array<{ raw: string; corrected: string }>;
   skipFormatter?: boolean;
+  partialInFlight?: boolean;
+  lastPartialAt?: number;
 }

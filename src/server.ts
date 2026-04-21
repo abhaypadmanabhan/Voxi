@@ -3,7 +3,7 @@ import Fastify from 'fastify';
 import websocket from '@fastify/websocket';
 import { z } from 'zod';
 import { registerTranscribeWsRoute } from './ws-handler.js';
-import { initMoonshine } from './asr.js';
+import { initMoonshine } from './asr-wcpp.js';
 
 const EnvSchema = z.object({
   PORT: z.coerce.number().int().positive().default(3001),

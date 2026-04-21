@@ -1,6 +1,6 @@
 import type { FastifyInstance } from 'fastify';
 import type WebSocket from 'ws';
-import { transcribeAudio } from './asr.js';
+import { transcribeAudio, transcribePartial } from './asr-wcpp.js';
 import { handleCommand } from './command.js';
 import { streamFormattedText } from './formatter.js';
 import { ruleFormat } from './rule-formatter.js';
@@ -76,6 +76,24 @@ export async function registerTranscribeWsRoute(fastify: FastifyInstance): Promi
             throw new Error('audio_chunk.data decoded to empty buffer');
           }
           state.audioChunks.push(chunk);
+
+          // Streaming-during-capture: kick a partial transcribe every ~1.5s of accumulated audio,
+          // one at a time. Purely UX — lets the renderer display live text while speaking.
+          const totalBytes = state.audioChunks.reduce((sum, c) => sum + c.length, 0);
+          const totalSec = totalBytes / 2 / 16000;
+          const now = Date.now();
+          const elapsed = now - (state.lastPartialAt ?? 0);
+          if (!state.partialInFlight && totalSec >= 1.5 && elapsed >= 800) {
+            state.partialInFlight = true;
+            state.lastPartialAt = now;
+            const snapshot = Buffer.concat(state.audioChunks);
+            transcribePartial(snapshot.toString('base64'))
+              .then((text) => {
+                if (text) sendMessage(socket, { type: 'partial', data: text });
+              })
+              .catch((err) => console.warn('[ws] partial transcribe failed:', err))
+              .finally(() => { state.partialInFlight = false; });
+          }
           return;
         }
 
@@ -102,6 +120,8 @@ export async function registerTranscribeWsRoute(fastify: FastifyInstance): Promi
           const t0 = Date.now();
           const fullAudio = Buffer.concat(state.audioChunks);
           state.audioChunks = [];
+          state.partialInFlight = false;
+          state.lastPartialAt = undefined;
 
           console.log(`[ws] STT starting, audio size=${fullAudio.length} bytes`);
           const transcript = await transcribeAudio(fullAudio.toString('base64'));

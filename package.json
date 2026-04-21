@@ -60,6 +60,7 @@
     "node-machine-id": "^1.1.12",
     "react": "^18",
     "react-dom": "^18",
+    "smart-whisper": "^0.8.1",
     "tailwind-merge": "^3.5.0",
     "uiohook-napi": "^1.5.5",
     "ws": "^8.19.0",

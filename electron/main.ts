@@ -88,6 +88,11 @@ async function startPipeline() {
       return
     }
 
+    if (msg.type === 'partial') {
+      mainWindow?.webContents.send('streaming-preview', msg.data)
+      return
+    }
+
     if (msg.type === 'token') {
       mainWindow?.webContents.send('status', 'processing')
       mainWindow?.webContents.send('streaming-preview', msg.data)
