@@ -1,6 +1,6 @@
 import { AnimatePresence, motion } from 'framer-motion'
 import { Mic } from 'lucide-react'
-import { useEffect } from 'react'
+import { type CSSProperties, useEffect } from 'react'
 
 type Status = 'idle' | 'recording' | 'processing'
 
@@ -139,7 +139,7 @@ export default function VoxiPill({
   const previewText = streamingPreview || transcript
   const isStreaming = status === 'processing' && !!streamingPreview
 
-  const pillStyle: React.CSSProperties = {
+  const pillStyle: CSSProperties = {
     position: 'relative',
     display: 'flex',
     alignItems: 'center',
@@ -181,8 +181,8 @@ export default function VoxiPill({
           e.preventDefault()
           onRightClick()
         }}
-        style={pillStyle}
-        animate={{
+        style={{
+          ...pillStyle,
           width: status === 'idle' ? 120 : status === 'recording' ? 280 : 200,
           height: status === 'idle' ? 40 : status === 'recording' ? 52 : 44,
         }}
