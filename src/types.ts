@@ -3,10 +3,7 @@ import { z } from 'zod';
 export const ContextMessageSchema = z.object({
   type: z.literal('context'),
   appName: z.string().min(1),
-  corrections: z.array(z.object({
-    raw: z.string(),
-    corrected: z.string()
-  })).optional(),
+  vocabulary: z.array(z.string()).optional(),
   skipFormatter: z.boolean().optional()
 });
 
@@ -43,7 +40,6 @@ export type ServerMessage =
   | { type: 'done'; data: string }
   | { type: 'error'; data: string }
   | { type: 'raw_transcript'; data: string }
-  | { type: 'partial'; data: string }
   | {
       type: 'command_result';
       data: {
@@ -58,8 +54,6 @@ export interface WsSessionState {
   appName?: string;
   isContextSet: boolean;
   audioChunks: Buffer[];
-  corrections: Array<{ raw: string; corrected: string }>;
+  vocabulary: string[];
   skipFormatter?: boolean;
-  partialInFlight?: boolean;
-  lastPartialAt?: number;
 }

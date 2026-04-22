@@ -30,6 +30,10 @@ function openDb(): Database.Database {
       correction TEXT NOT NULL,
       count      INTEGER DEFAULT 1
     );
+    CREATE TABLE IF NOT EXISTS user_vocab (
+      word       TEXT PRIMARY KEY,
+      created_at INTEGER NOT NULL DEFAULT (unixepoch())
+    );
   `)
   // Migrate: add confidence column if missing
   const cols = db.prepare('PRAGMA table_info(corrections)').all() as Array<{ name: string }>
@@ -99,6 +103,28 @@ export function findCorrection(raw: string): string | null {
 
 export function clearCorrections(): void {
   db.prepare('DELETE FROM corrections').run()
+}
+
+// ── User vocabulary (explicit bias for Whisper initial_prompt) ──────────────
+
+export function addVocabEntry(word: string): void {
+  const trimmed = word.trim()
+  if (!trimmed) return
+  db.prepare(
+    `INSERT INTO user_vocab (word) VALUES (?)
+     ON CONFLICT(word) DO NOTHING`,
+  ).run(trimmed)
+}
+
+export function removeVocabEntry(word: string): void {
+  db.prepare('DELETE FROM user_vocab WHERE word = ?').run(word.trim())
+}
+
+export function getVocabulary(): string[] {
+  const rows = db
+    .prepare('SELECT word FROM user_vocab ORDER BY created_at DESC')
+    .all() as Array<{ word: string }>
+  return rows.map((r) => r.word)
 }
 
 // ── Settings ─────────────────────────────────────────────────────────────────

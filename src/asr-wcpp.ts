@@ -2,6 +2,13 @@ import { Whisper } from 'smart-whisper';
 import { cpus } from 'node:os';
 import { ensureWhisperModel } from './model-loader.js';
 
+export interface TranscribeOptions {
+  /** Optional vocabulary hint: proper nouns / domain terms the user explicitly added. */
+  vocabulary?: string[];
+  /** Optional active app name for minimal domain context. */
+  appName?: string;
+}
+
 let _whisper: Whisper | null = null;
 let _loadPromise: Promise<Whisper> | null = null;
 
@@ -87,7 +94,24 @@ function deRepeat(text: string): string {
   return out.join(' ');
 }
 
-export async function transcribeAudio(base64Pcm: string): Promise<string> {
+/**
+ * Build Whisper `initial_prompt` from explicit vocabulary + light app context.
+ * whisper.cpp prepends this as "preceding context" tokens — decoder treats the words as
+ * recently spoken and gives them higher probability during beam search. Does NOT inject
+ * words without acoustic support, unlike regex substitution.
+ */
+function buildPrompt(opts: TranscribeOptions): string {
+  const parts: string[] = [];
+  if (opts.appName) parts.push(`Dictating in ${opts.appName}.`);
+  if (opts.vocabulary && opts.vocabulary.length) {
+    // Cap at 15 terms — large prompts bias too strongly and may leak into unrelated audio.
+    const terms = opts.vocabulary.slice(0, 15).join(', ');
+    parts.push(`Vocabulary: ${terms}.`);
+  }
+  return parts.join(' ').slice(0, 900); // ≈ 200 tokens, under whisper's 224 budget
+}
+
+export async function transcribeAudio(base64Pcm: string, opts: TranscribeOptions = {}): Promise<string> {
   const float32 = pcm16ToFloat32(Buffer.from(base64Pcm, 'base64'));
 
   let peak = 0;
@@ -104,6 +128,11 @@ export async function transcribeAudio(base64Pcm: string): Promise<string> {
     return '';
   }
 
+  const initialPrompt = buildPrompt(opts);
+  if (initialPrompt) {
+    console.log(`[asr-wcpp] initial_prompt="${initialPrompt}"`);
+  }
+
   const w = await getWhisper();
   const tInfer = Date.now();
   const task = await w.transcribe(float32, {
@@ -113,6 +142,10 @@ export async function transcribeAudio(base64Pcm: string): Promise<string> {
     single_segment: false,
     suppress_non_speech_tokens: true,
     temperature: 0.0,
+    temperature_inc: 0.2,    // retry decode at higher temp if logprob/compression fails
+    logprob_thold: -1.0,     // avg logprob threshold for retry
+    no_speech_thold: 0.6,    // drop segment if no-speech prob exceeds this → kills silence hallucinations
+    initial_prompt: initialPrompt || undefined,
   });
   const results = await task.result;
   const raw = results.map((r) => r.text).join(' ').trim();
@@ -123,37 +156,4 @@ export async function transcribeAudio(base64Pcm: string): Promise<string> {
     console.warn(`[asr-wcpp] deRepeat zeroed output. raw="${raw.slice(0, 120)}"`);
   }
   return cleaned;
-}
-
-/**
- * Streaming-during-capture: encode a partial audio buffer and return best-effort text.
- * Called on each audio_chunk; caller discards intermediate results and uses final transcribeAudio on end_stream.
- * The benefit is that whisper.cpp may cache compute / warm kernels, and we can emit partial hypotheses for UI.
- */
-export async function transcribePartial(base64Pcm: string): Promise<string> {
-  const float32 = pcm16ToFloat32(Buffer.from(base64Pcm, 'base64'));
-  if (float32.length < 16000) return ''; // skip <1s — whisper has 1s minimum mel window
-
-  let peak = 0;
-  for (let i = 0; i < float32.length; i++) {
-    const v = Math.abs(float32[i]);
-    if (v > peak) peak = v;
-  }
-  if (peak < 0.002) return '';
-
-  const w = await getWhisper();
-  const t0 = Date.now();
-  const task = await w.transcribe(float32, {
-    language: 'en',
-    n_threads: Math.max(1, cpus().length - 1),
-    no_timestamps: true,
-    single_segment: true,
-    suppress_non_speech_tokens: true,
-    temperature: 0.0,
-    no_context: true,
-  });
-  const results = await task.result;
-  const raw = results.map((r) => r.text).join(' ').trim();
-  console.log(`[asr-wcpp] partial ${Date.now() - t0}ms dur=${(float32.length / 16000).toFixed(2)}s text="${raw.slice(0, 60)}"`);
-  return deRepeat(raw);
 }

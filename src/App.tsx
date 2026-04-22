@@ -18,6 +18,12 @@ declare global {
       mouseLeaveInteractive: () => void
       getSetting: (key: string) => Promise<string | null>
       setSetting: (key: string, value: string) => Promise<void>
+      addVocabEntry: (word: string) => Promise<void>
+      removeVocabEntry: (word: string) => Promise<void>
+      getVocabulary: () => Promise<string[]>
+      quitApp: () => void
+      settingsOpen: () => void
+      settingsClose: () => void
     }
   }
 }
@@ -180,11 +186,20 @@ export default function App() {
   }
 
   return (
-    <div className="w-full h-full flex flex-col items-center justify-end pb-4 pointer-events-none">
+    <div
+      className={`w-full h-full flex flex-col items-center justify-end pb-4 ${
+        showSettings ? '' : 'pointer-events-none'
+      }`}
+    >
       <div
         className="pointer-events-auto"
         onMouseEnter={() => window.voxi.mouseEnterInteractive()}
-        onMouseLeave={() => window.voxi.mouseLeaveInteractive()}
+        onMouseLeave={() => {
+          // Keep window interactive while settings panel is open — otherwise moving
+          // cursor off the pill into the panel area would re-enable mouse forwarding
+          // and make the panel click-through.
+          if (!showSettings) window.voxi.mouseLeaveInteractive()
+        }}
       >
         <VoxiPill
           status={status}
@@ -193,14 +208,24 @@ export default function App() {
           transcript={transcript}
           correctionLearned={correctionLearned}
           onClick={handleClick}
-          onRightClick={() => setShowSettings(true)}
+          onRightClick={() => {
+            setShowSettings(true)
+            window.voxi.settingsOpen()
+          }}
           onDismissTranscript={() => {
             setTranscript('')
             setStreamingPreview('')
           }}
         />
       </div>
-      {showSettings && <SettingsPanel onClose={() => setShowSettings(false)} />}
+      {showSettings && (
+        <SettingsPanel
+          onClose={() => {
+            setShowSettings(false)
+            window.voxi.settingsClose()
+          }}
+        />
+      )}
     </div>
   )
 }

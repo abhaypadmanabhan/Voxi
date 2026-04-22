@@ -69,28 +69,6 @@ describe('streamFormattedText (Ollama)', () => {
     expect(systemMsg.content).toContain('slack')
   })
 
-  it('includes corrections as few-shot examples in system prompt', async () => {
-    const lines = [JSON.stringify({ message: { content: 'result' }, done: true })]
-
-    vi.mocked(fetch).mockResolvedValue({
-      ok: true,
-      body: makeStreamBody(lines)
-    } as any)
-
-    const corrections = [{ raw: 'voxi', corrected: 'Voxi' }]
-    await streamFormattedText({
-      rawTranscript: 'test',
-      appName: 'test-app',
-      corrections,
-      onToken: vi.fn()
-    })
-
-    const callArgs = vi.mocked(fetch).mock.calls[0]
-    const body = JSON.parse(callArgs[1]!.body as string)
-    const systemMsg = body.messages.find((m: any) => m.role === 'system')
-    expect(systemMsg.content).toContain('"voxi" → "Voxi"')
-  })
-
   it('throws helpful error when Ollama is not running', async () => {
     vi.mocked(fetch).mockRejectedValue(new Error('ECONNREFUSED'))
 

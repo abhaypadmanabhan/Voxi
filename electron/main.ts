@@ -2,8 +2,7 @@ import { app, BrowserWindow, clipboard, dialog, globalShortcut, ipcMain, screen,
 import { join } from 'path'
 import WebSocket = require('ws')
 import { Key, keyboard } from '@nut-tree-fork/nut-js'
-import levenshtein from 'fast-levenshtein'
-import { addCorrection, clearCorrections, findCorrection, getRecentCorrections, getSetting, setSetting, setApiKey, getApiKey } from './store'
+import { getSetting, setSetting, setApiKey, getApiKey, addVocabEntry, removeVocabEntry, getVocabulary } from './store'
 
 let mainWindow: BrowserWindow | null = null
 let ws: WebSocket | null = null
@@ -12,16 +11,30 @@ let autoStopTimer: ReturnType<typeof setTimeout> | null = null
 
 const MAX_RECORDING_MS = 30_000
 
+const WIN_W = 420
+const WIN_H_IDLE = 300
+const WIN_H_SETTINGS = 640
+
+function resizeForSettings(open: boolean) {
+  if (!mainWindow) return
+  const { width, height } = screen.getPrimaryDisplay().workAreaSize
+  const newH = open ? WIN_H_SETTINGS : WIN_H_IDLE
+  mainWindow.setBounds({
+    x: Math.round((width - WIN_W) / 2),
+    y: height - newH,
+    width: WIN_W,
+    height: newH,
+  })
+}
+
 function createWindow() {
   const { width, height } = screen.getPrimaryDisplay().workAreaSize
-  const WIN_W = 420
-  const WIN_H = 300
 
   mainWindow = new BrowserWindow({
     width: WIN_W,
-    height: WIN_H,
+    height: WIN_H_IDLE,
     x: Math.round((width - WIN_W) / 2),
-    y: height - WIN_H,
+    y: height - WIN_H_IDLE,
     frame: false,
     transparent: true,
     alwaysOnTop: true,
@@ -62,10 +75,10 @@ async function startPipeline() {
   ws = new WebSocket('ws://localhost:3001/transcribe')
 
   ws.on('open', () => {
-    const corrections = getRecentCorrections(10)
+    const vocabulary = getVocabulary()
     // Default OFF for speed — LLM formatter is opt-in via settings
     const skipFormatter = getSetting('use_llm_formatter') !== 'true'
-    ws!.send(JSON.stringify({ type: 'context', appName, corrections, skipFormatter }))
+    ws!.send(JSON.stringify({ type: 'context', appName, vocabulary, skipFormatter }))
     mainWindow?.webContents.send('start-mic')
   })
 
@@ -85,11 +98,6 @@ async function startPipeline() {
           }))
         }
       }
-      return
-    }
-
-    if (msg.type === 'partial') {
-      mainWindow?.webContents.send('streaming-preview', msg.data)
       return
     }
 
@@ -130,31 +138,8 @@ function stopPipeline() {
   }
 }
 
-function startCorrectionPolling(injected: string, appName: string): void {
-  if (injected.length < 5) return
-  let polls = 0
-  let lastClip = ''
-  // Poll for up to 3s (6 × 500ms) — cuts background CPU vs 15s and unblocks rapid successive dictations
-  const id = setInterval(() => {
-    if (++polls > 6) {
-      clearInterval(id)
-      return
-    }
-    const clip = clipboard.readText().trim()
-    if (!clip || clip === lastClip || clip === injected) return
-    lastClip = clip
-    const maxLen = Math.max(injected.length, clip.length)
-    const similarity = 1 - levenshtein.get(injected, clip) / maxLen
-    if (similarity > 0.3 && similarity < 1.0) {
-      clearInterval(id)
-      addCorrection(injected, clip, appName, similarity)
-      mainWindow?.webContents.send('correction-learned')
-    }
-  }, 500)
-}
-
-async function injectText(text: string, appName: string): Promise<void> {
-  const corrected = findCorrection(text) ?? text
+async function injectText(text: string, _appName: string): Promise<void> {
+  const corrected = text
   if (!corrected.trim()) {
     console.log('[inject] skip — empty transcript')
     return
@@ -193,8 +178,6 @@ async function injectText(text: string, appName: string): Promise<void> {
     }
     return
   }
-
-  startCorrectionPolling(corrected, appName)
 }
 
 app.whenReady().then(() => {
@@ -211,10 +194,19 @@ app.whenReady().then(() => {
   ipcMain.handle('set-setting', (_e, key: string, value: string) => setSetting(key, value))
   ipcMain.handle('set-api-key', (_e, name: string, value: string) => setApiKey(name, value))
   ipcMain.handle('get-api-key', (_e, name: string) => getApiKey(name))
-  ipcMain.handle('clear-corrections', () => clearCorrections())
+  ipcMain.handle('add-vocab-entry', (_e, word: string) => addVocabEntry(word))
+  ipcMain.handle('remove-vocab-entry', (_e, word: string) => removeVocabEntry(word))
+  ipcMain.handle('get-vocabulary', () => getVocabulary())
+  ipcMain.on('quit-app', () => app.quit())
+  ipcMain.on('settings-open', () => {
+    resizeForSettings(true)
+    mainWindow?.setIgnoreMouseEvents(false)
+  })
+  ipcMain.on('settings-close', () => {
+    resizeForSettings(false)
+    mainWindow?.setIgnoreMouseEvents(true, { forward: true })
+  })
 
-  // Clear stale ghost corrections on startup
-  clearCorrections()
   ipcMain.on('audio-chunk', (_e, b64: string) => {
     if (ws?.readyState === WebSocket.OPEN) {
       ws.send(JSON.stringify({ type: 'audio_chunk', data: b64 }))

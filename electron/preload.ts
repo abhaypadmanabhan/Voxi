@@ -21,6 +21,12 @@ contextBridge.exposeInMainWorld('voxi', {
   setSetting: (key: string, value: string) => ipcRenderer.invoke('set-setting', key, value),
   setApiKey: (name: string, value: string) => ipcRenderer.invoke('set-api-key', name, value),
   getApiKey: (name: string) => ipcRenderer.invoke('get-api-key', name),
+  addVocabEntry: (word: string) => ipcRenderer.invoke('add-vocab-entry', word),
+  removeVocabEntry: (word: string) => ipcRenderer.invoke('remove-vocab-entry', word),
+  getVocabulary: (): Promise<string[]> => ipcRenderer.invoke('get-vocabulary'),
+  quitApp: () => ipcRenderer.send('quit-app'),
+  settingsOpen: () => ipcRenderer.send('settings-open'),
+  settingsClose: () => ipcRenderer.send('settings-close'),
   mouseEnterInteractive: () => ipcRenderer.send('mouse-enter-interactive'),
   mouseLeaveInteractive: () => ipcRenderer.send('mouse-leave-interactive'),
 })

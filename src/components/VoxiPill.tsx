@@ -1,6 +1,6 @@
 import { AnimatePresence, motion } from 'framer-motion'
-import { Mic } from 'lucide-react'
-import { type CSSProperties, useEffect } from 'react'
+import { Mic, Settings as SettingsIcon } from 'lucide-react'
+import { type CSSProperties, useEffect, useState } from 'react'
 
 type Status = 'idle' | 'recording' | 'processing'
 
@@ -169,24 +169,31 @@ export default function VoxiPill({
     }),
   }
 
+  const [hovered, setHovered] = useState(false)
+
   return (
-    <div className="flex flex-col items-center">
+    <div
+      className="flex flex-col items-center"
+      onMouseEnter={() => setHovered(true)}
+      onMouseLeave={() => setHovered(false)}
+    >
       <PreviewText text={previewText} isStreaming={isStreaming} onDismiss={onDismissTranscript} />
       <CorrectionBadge show={correctionLearned} />
-      <motion.button
-        layout
-        transition={{ type: 'spring', bounce: 0.25, duration: 0.4 }}
-        onClick={onClick}
-        onContextMenu={(e) => {
-          e.preventDefault()
-          onRightClick()
-        }}
-        style={{
-          ...pillStyle,
-          width: status === 'idle' ? 120 : status === 'recording' ? 280 : 200,
-          height: status === 'idle' ? 40 : status === 'recording' ? 52 : 44,
-        }}
-      >
+      <div style={{ position: 'relative', display: 'flex', alignItems: 'center' }}>
+        <motion.button
+          layout
+          transition={{ type: 'spring', bounce: 0.25, duration: 0.4 }}
+          onClick={onClick}
+          onContextMenu={(e) => {
+            e.preventDefault()
+            onRightClick()
+          }}
+          style={{
+            ...pillStyle,
+            width: status === 'idle' ? 120 : status === 'recording' ? 280 : 200,
+            height: status === 'idle' ? 40 : status === 'recording' ? 52 : 44,
+          }}
+        >
         <AnimatePresence mode="wait">
           {status === 'idle' && (
             <motion.div
@@ -283,7 +290,58 @@ export default function VoxiPill({
             </motion.div>
           )}
         </AnimatePresence>
-      </motion.button>
+        </motion.button>
+
+        {/* Settings affordance — reveals on hover when idle. Right-click on pill also works. */}
+        <AnimatePresence>
+          {status === 'idle' && hovered && (
+            <motion.button
+              key="gear"
+              initial={{ opacity: 0, x: -4, scale: 0.85 }}
+              animate={{ opacity: 1, x: 0, scale: 1 }}
+              exit={{ opacity: 0, x: -4, scale: 0.85 }}
+              transition={{ type: 'spring', bounce: 0.3, duration: 0.28 }}
+              onClick={(e) => {
+                e.stopPropagation()
+                onRightClick()
+              }}
+              aria-label="Open settings"
+              title="Settings"
+              style={{
+                position: 'absolute',
+                left: 'calc(100% + 6px)',
+                top: '50%',
+                transform: 'translateY(-50%)',
+                width: 32,
+                height: 32,
+                borderRadius: 16,
+                display: 'inline-flex',
+                alignItems: 'center',
+                justifyContent: 'center',
+                background: 'rgba(12,12,14,0.72)',
+                backdropFilter: 'blur(24px) saturate(1.4)',
+                WebkitBackdropFilter: 'blur(24px) saturate(1.4)',
+                border: '0.5px solid rgba(255,255,255,0.10)',
+                boxShadow: 'inset 0 1px 0 0 rgba(255,255,255,0.06), 0 6px 18px rgba(0,0,0,0.35)',
+                color: 'rgba(255,255,255,0.65)',
+                cursor: 'pointer',
+                outline: 'none',
+                padding: 0,
+              }}
+              onMouseEnter={(e) => {
+                e.currentTarget.style.color = 'rgba(255,255,255,0.9)'
+                e.currentTarget.style.background = 'rgba(18,18,22,0.78)'
+              }}
+              onMouseLeave={(e) => {
+                e.currentTarget.style.color = 'rgba(255,255,255,0.65)'
+                e.currentTarget.style.background = 'rgba(12,12,14,0.72)'
+              }}
+            >
+              <SettingsIcon size={14} strokeWidth={1.8} />
+            </motion.button>
+          )}
+        </AnimatePresence>
+      </div>
     </div>
   )
 }

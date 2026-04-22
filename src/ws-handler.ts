@@ -1,6 +1,6 @@
 import type { FastifyInstance } from 'fastify';
 import type WebSocket from 'ws';
-import { transcribeAudio, transcribePartial } from './asr-wcpp.js';
+import { transcribeAudio } from './asr-wcpp.js';
 import { handleCommand } from './command.js';
 import { streamFormattedText } from './formatter.js';
 import { ruleFormat } from './rule-formatter.js';
@@ -33,7 +33,7 @@ export async function registerTranscribeWsRoute(fastify: FastifyInstance): Promi
       appName: undefined,
       isContextSet: false,
       audioChunks: [],
-      corrections: []
+      vocabulary: []
     };
 
     socket.on('message', async (rawData: WebSocket.RawData) => {
@@ -62,9 +62,9 @@ export async function registerTranscribeWsRoute(fastify: FastifyInstance): Promi
         if (message.type === 'context') {
           state.appName = message.appName;
           state.isContextSet = true;
-          state.corrections = message.corrections ?? [];
+          state.vocabulary = message.vocabulary ?? [];
           state.skipFormatter = message.skipFormatter ?? false;
-          console.log(`[ws] context set, appName=${message.appName}, skipFormatter=${state.skipFormatter}`);
+          console.log(`[ws] context set, appName=${message.appName}, vocab=${state.vocabulary.length}, skipFormatter=${state.skipFormatter}`);
           return;
         }
 
@@ -76,24 +76,6 @@ export async function registerTranscribeWsRoute(fastify: FastifyInstance): Promi
             throw new Error('audio_chunk.data decoded to empty buffer');
           }
           state.audioChunks.push(chunk);
-
-          // Streaming-during-capture: kick a partial transcribe every ~1.5s of accumulated audio,
-          // one at a time. Purely UX — lets the renderer display live text while speaking.
-          const totalBytes = state.audioChunks.reduce((sum, c) => sum + c.length, 0);
-          const totalSec = totalBytes / 2 / 16000;
-          const now = Date.now();
-          const elapsed = now - (state.lastPartialAt ?? 0);
-          if (!state.partialInFlight && totalSec >= 1.5 && elapsed >= 800) {
-            state.partialInFlight = true;
-            state.lastPartialAt = now;
-            const snapshot = Buffer.concat(state.audioChunks);
-            transcribePartial(snapshot.toString('base64'))
-              .then((text) => {
-                if (text) sendMessage(socket, { type: 'partial', data: text });
-              })
-              .catch((err) => console.warn('[ws] partial transcribe failed:', err))
-              .finally(() => { state.partialInFlight = false; });
-          }
           return;
         }
 
@@ -120,11 +102,12 @@ export async function registerTranscribeWsRoute(fastify: FastifyInstance): Promi
           const t0 = Date.now();
           const fullAudio = Buffer.concat(state.audioChunks);
           state.audioChunks = [];
-          state.partialInFlight = false;
-          state.lastPartialAt = undefined;
 
           console.log(`[ws] STT starting, audio size=${fullAudio.length} bytes`);
-          const transcript = await transcribeAudio(fullAudio.toString('base64'));
+          const transcript = await transcribeAudio(fullAudio.toString('base64'), {
+            vocabulary: state.vocabulary,
+            appName: state.appName,
+          });
           console.log(`[timing] STT: ${Date.now() - t0}ms — "${transcript}"`);
 
           // Send raw transcript to Electron for "hey voxi" detection
@@ -141,7 +124,6 @@ export async function registerTranscribeWsRoute(fastify: FastifyInstance): Promi
             const formatted = ruleFormat({
               rawTranscript: transcript,
               appName: state.appName!,
-              corrections: state.corrections,
             });
             console.log(`[timing] rule-format: ${Date.now() - tRule}ms (skipFormatter=${state.skipFormatter})`);
             console.log(`[timing] end-to-end: ${Date.now() - t0}ms`);
@@ -155,7 +137,6 @@ export async function registerTranscribeWsRoute(fastify: FastifyInstance): Promi
           const formatted = await streamFormattedText({
             rawTranscript: transcript,
             appName: state.appName!,
-            corrections: state.corrections,
             onToken: (tok) => {
               if (firstToken) {
                 console.log(`[timing] LLM first token: ${Date.now() - t1}ms`);

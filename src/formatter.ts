@@ -11,16 +11,8 @@ const APP_TONE: Record<string, string> = {
   vscode: 'minimal formatting, technical precision',
 }
 
-function buildSystemPrompt(
-  appName: string,
-  corrections: Array<{ raw: string; corrected: string }>
-): string {
+function buildSystemPrompt(appName: string): string {
   const tone = APP_TONE[appName.toLowerCase()] ?? 'neutral, clear tone'
-  const fewShot =
-    corrections.length > 0
-      ? '\nLearned corrections from this user:\n' +
-        corrections.map(c => `"${c.raw}" → "${c.corrected}"`).join('\n')
-      : ''
   return [
     'You are a voice dictation formatter for Voxi.',
     '1. Remove filler words: um, uh, like, you know, sort of, kind of, right',
@@ -30,14 +22,12 @@ function buildSystemPrompt(
     '5. Detect code mentions → format inline code with backticks',
     `6. Tone for "${appName}": ${tone}`,
     '7. Return ONLY the formatted text. No explanation, no preamble.',
-    fewShot,
   ].join('\n')
 }
 
 export async function streamFormattedText(params: {
   rawTranscript: string
   appName: string
-  corrections?: Array<{ raw: string; corrected: string }>
   onToken: (token: string) => void
 }): Promise<string> {
   let response: Response
@@ -51,7 +41,7 @@ export async function streamFormattedText(params: {
         messages: [
           {
             role: 'system',
-            content: buildSystemPrompt(params.appName, params.corrections ?? []),
+            content: buildSystemPrompt(params.appName),
           },
           { role: 'user', content: params.rawTranscript },
         ],
