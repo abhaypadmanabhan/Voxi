@@ -2,6 +2,14 @@ import { useEffect, useRef, useState } from 'react'
 import VoxiPill from './components/VoxiPill'
 import SettingsPanel from './components/SettingsPanel'
 
+export interface HotkeySpec {
+  meta: boolean
+  ctrl: boolean
+  alt: boolean
+  shift: boolean
+  key: string
+}
+
 declare global {
   interface Window {
     voxi: {
@@ -13,7 +21,6 @@ declare global {
       onStopMic: (cb: () => void) => void
       sendAudioChunk: (b64: string) => void
       onStreamingPreview: (cb: (text: string) => void) => void
-      onCorrectionLearned: (cb: () => void) => void
       mouseEnterInteractive: () => void
       mouseLeaveInteractive: () => void
       getSetting: (key: string) => Promise<string | null>
@@ -21,6 +28,8 @@ declare global {
       addVocabEntry: (word: string) => Promise<void>
       removeVocabEntry: (word: string) => Promise<void>
       getVocabulary: () => Promise<string[]>
+      getHotkey: () => Promise<HotkeySpec>
+      setHotkey: (spec: HotkeySpec) => Promise<HotkeySpec>
       quitApp: () => void
       settingsOpen: () => void
       settingsClose: () => void
@@ -80,7 +89,6 @@ export default function App() {
   const [transcript, setTranscript] = useState('')
   const [showSettings, setShowSettings] = useState(false)
   const [amplitudes, setAmplitudes] = useState<number[]>(new Array(7).fill(0))
-  const [correctionLearned, setCorrectionLearned] = useState(false)
   const micRef = useRef<MicState | null>(null)
   const analyserRef = useRef<AnalyserNode | null>(null)
   const animFrameRef = useRef<number>(0)
@@ -107,10 +115,6 @@ export default function App() {
     })
     window.voxi.onStartMic(() => startMic().catch((e) => console.error('[mic] failed:', e)))
     window.voxi.onStopMic(stopMic)
-    window.voxi.onCorrectionLearned(() => {
-      setCorrectionLearned(true)
-      setTimeout(() => setCorrectionLearned(false), 2500)
-    })
   }, [])
 
   async function startMic() {
@@ -206,7 +210,6 @@ export default function App() {
           amplitudes={amplitudes}
           streamingPreview={streamingPreview}
           transcript={transcript}
-          correctionLearned={correctionLearned}
           onClick={handleClick}
           onRightClick={() => {
             setShowSettings(true)

@@ -1,8 +1,11 @@
-import { app, BrowserWindow, clipboard, dialog, globalShortcut, ipcMain, screen, session, shell } from 'electron'
+import { app, BrowserWindow, clipboard, dialog, ipcMain, screen, session, shell } from 'electron'
 import { join } from 'path'
 import WebSocket = require('ws')
 import { Key, keyboard } from '@nut-tree-fork/nut-js'
+import { uIOhook, type UiohookKeyboardEvent } from 'uiohook-napi'
+import activeWindow from 'active-win'
 import { getSetting, setSetting, setApiKey, getApiKey, addVocabEntry, removeVocabEntry, getVocabulary } from './store'
+import { parseHotkey, keycodeFor, type HotkeySpec } from './hotkey'
 
 let mainWindow: BrowserWindow | null = null
 let ws: WebSocket | null = null
@@ -71,7 +74,13 @@ async function startPipeline() {
 
   mainWindow?.webContents.send('status', 'recording')
 
-  const appName = 'Unknown'
+  let appName = 'Unknown'
+  try {
+    const win = await activeWindow()
+    appName = win?.owner?.name ?? 'Unknown'
+  } catch (err) {
+    console.warn('[active-win] lookup failed:', (err as Error).message)
+  }
   ws = new WebSocket('ws://localhost:3001/transcribe')
 
   ws.on('open', () => {
@@ -183,9 +192,46 @@ async function injectText(text: string, _appName: string): Promise<void> {
 app.whenReady().then(() => {
   createWindow()
 
-  globalShortcut.register('CommandOrControl+0', () => {
-    if (isRecording) stopPipeline()
-    else startPipeline()
+  // Hold-to-talk via uiohook-napi; hotkey spec is user-configurable.
+  let hotkey: HotkeySpec = parseHotkey(getSetting('hotkey'))
+  let hotkeyCode: number | null = keycodeFor(hotkey.key)
+
+  const modsHeld = (e: UiohookKeyboardEvent): boolean => {
+    if (hotkey.meta && !e.metaKey) return false
+    if (hotkey.ctrl && !e.ctrlKey) return false
+    if (hotkey.alt && !e.altKey) return false
+    if (hotkey.shift && !e.shiftKey) return false
+    return true
+  }
+  const modsExactMatch = (e: UiohookKeyboardEvent): boolean => {
+    return (
+      hotkey.meta === e.metaKey &&
+      hotkey.ctrl === e.ctrlKey &&
+      hotkey.alt === e.altKey &&
+      hotkey.shift === e.shiftKey
+    )
+  }
+
+  uIOhook.on('keydown', (e: UiohookKeyboardEvent) => {
+    if (hotkeyCode === null) return
+    if (e.keycode === hotkeyCode && modsExactMatch(e) && !isRecording) {
+      startPipeline()
+    }
+  })
+  uIOhook.on('keyup', (e: UiohookKeyboardEvent) => {
+    if (!isRecording || hotkeyCode === null) return
+    if (e.keycode === hotkeyCode || !modsHeld(e)) {
+      stopPipeline()
+    }
+  })
+  uIOhook.start()
+
+  ipcMain.handle('get-hotkey', () => hotkey)
+  ipcMain.handle('set-hotkey', (_e, spec: HotkeySpec) => {
+    hotkey = parseHotkey(JSON.stringify(spec))
+    hotkeyCode = keycodeFor(hotkey.key)
+    setSetting('hotkey', JSON.stringify(hotkey))
+    return hotkey
   })
 
   ipcMain.on('start-recording', () => startPipeline())
@@ -221,7 +267,9 @@ app.whenReady().then(() => {
   })
 })
 
-app.on('will-quit', () => globalShortcut.unregisterAll())
+app.on('will-quit', () => {
+  try { uIOhook.stop() } catch {}
+})
 
 app.on('window-all-closed', () => {
   if (process.platform !== 'darwin') app.quit()

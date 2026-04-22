@@ -15,8 +15,6 @@ contextBridge.exposeInMainWorld('voxi', {
     ipcRenderer.send('audio-chunk', b64),
   onStreamingPreview: (cb: (text: string) => void) =>
     ipcRenderer.on('streaming-preview', (_e, t) => cb(t)),
-  onCorrectionLearned: (cb: () => void) =>
-    ipcRenderer.on('correction-learned', cb),
   getSetting: (key: string) => ipcRenderer.invoke('get-setting', key),
   setSetting: (key: string, value: string) => ipcRenderer.invoke('set-setting', key, value),
   setApiKey: (name: string, value: string) => ipcRenderer.invoke('set-api-key', name, value),
@@ -24,6 +22,8 @@ contextBridge.exposeInMainWorld('voxi', {
   addVocabEntry: (word: string) => ipcRenderer.invoke('add-vocab-entry', word),
   removeVocabEntry: (word: string) => ipcRenderer.invoke('remove-vocab-entry', word),
   getVocabulary: (): Promise<string[]> => ipcRenderer.invoke('get-vocabulary'),
+  getHotkey: () => ipcRenderer.invoke('get-hotkey'),
+  setHotkey: (spec: unknown) => ipcRenderer.invoke('set-hotkey', spec),
   quitApp: () => ipcRenderer.send('quit-app'),
   settingsOpen: () => ipcRenderer.send('settings-open'),
   settingsClose: () => ipcRenderer.send('settings-close'),

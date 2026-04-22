@@ -1,8 +1,107 @@
 import { History, Settings as AdvancedIcon, LogOut } from 'lucide-react'
-import { type CSSProperties, useEffect, useState } from 'react'
+import { type CSSProperties, type KeyboardEvent, useEffect, useRef, useState } from 'react'
+import type { HotkeySpec } from '../App'
 
 interface Props {
   onClose: () => void
+}
+
+const MODIFIER_KEYS = new Set(['Meta', 'Control', 'Alt', 'Shift'])
+
+function normalizeKey(e: KeyboardEvent): string | null {
+  if (MODIFIER_KEYS.has(e.key)) return null
+  if (e.key === ' ') return 'Space'
+  if (e.key.length === 1) {
+    const ch = e.key.toUpperCase()
+    if (/[A-Z0-9]/.test(ch)) return ch
+  }
+  const named: Record<string, string> = {
+    Enter: 'Enter',
+    Tab: 'Tab',
+    Escape: 'Escape',
+    Backspace: 'Backspace',
+    ArrowUp: 'ArrowUp',
+    ArrowDown: 'ArrowDown',
+    ArrowLeft: 'ArrowLeft',
+    ArrowRight: 'ArrowRight',
+  }
+  return named[e.key] ?? null
+}
+
+function formatSpec(h: HotkeySpec, isMac: boolean): Array<string> {
+  const parts: string[] = []
+  if (h.meta) parts.push(isMac ? '⌘' : 'Win')
+  if (h.ctrl) parts.push(isMac ? '⌃' : 'Ctrl')
+  if (h.alt) parts.push(isMac ? '⌥' : 'Alt')
+  if (h.shift) parts.push('⇧')
+  parts.push(h.key)
+  return parts
+}
+
+function HotkeyRecorder({ spec, onChange }: { spec: HotkeySpec | null; onChange: (s: HotkeySpec) => void }) {
+  const [recording, setRecording] = useState(false)
+  const btnRef = useRef<HTMLButtonElement | null>(null)
+  const isMac = navigator.platform.toLowerCase().includes('mac')
+
+  function onKeyDown(e: KeyboardEvent<HTMLButtonElement>) {
+    if (!recording) return
+    e.preventDefault()
+    e.stopPropagation()
+    if (e.key === 'Escape') {
+      setRecording(false)
+      btnRef.current?.blur()
+      return
+    }
+    const key = normalizeKey(e)
+    if (!key) return
+    const hasMod = e.metaKey || e.ctrlKey || e.altKey
+    if (!hasMod) return
+    const next: HotkeySpec = {
+      meta: e.metaKey,
+      ctrl: e.ctrlKey,
+      alt: e.altKey,
+      shift: e.shiftKey,
+      key,
+    }
+    onChange(next)
+    setRecording(false)
+    btnRef.current?.blur()
+  }
+
+  const parts = spec ? formatSpec(spec, isMac) : []
+
+  return (
+    <button
+      ref={btnRef}
+      onClick={() => setRecording((r) => !r)}
+      onKeyDown={onKeyDown}
+      onBlur={() => setRecording(false)}
+      style={{
+        display: 'flex',
+        alignItems: 'center',
+        gap: 3,
+        padding: '3px 6px',
+        minHeight: 24,
+        background: recording ? 'rgba(244,63,94,0.14)' : 'rgba(255,255,255,0.04)',
+        border: recording
+          ? '0.5px solid rgba(244,63,94,0.5)'
+          : '0.5px solid rgba(255,255,255,0.12)',
+        borderRadius: 6,
+        cursor: 'pointer',
+        outline: 'none',
+        fontFamily: 'inherit',
+      }}
+      title={recording ? 'Press new shortcut (Esc to cancel)' : 'Click to rebind'}
+    >
+      {recording ? (
+        <span style={{ fontSize: 10.5, color: '#fca5a5', padding: '0 4px' }}>press keys…</span>
+      ) : parts.length === 0 ? (
+        <span style={{ fontSize: 10.5, color: 'rgba(255,255,255,0.5)', padding: '0 4px' }}>—</span>
+      ) : (
+        parts.map((p, i) => <Kbd key={i}>{p}</Kbd>)
+      )}
+    </button>
+  )
 }
 
 // ── Primitives ──────────────────────────────────────────────────────────────
@@ -260,11 +359,18 @@ function MenuItem({
 export default function SettingsPanel({ onClose }: Props) {
   const [useLlm, setUseLlm] = useState(false)
   const [vocabulary, setVocabulary] = useState<string[]>([])
+  const [hotkey, setHotkeyState] = useState<HotkeySpec | null>(null)
 
   useEffect(() => {
     window.voxi.getSetting('use_llm_formatter').then((val) => setUseLlm(val === 'true'))
+    window.voxi.getHotkey().then(setHotkeyState).catch(() => {})
     refreshVocab()
   }, [])
+
+  async function changeHotkey(spec: HotkeySpec) {
+    const applied = await window.voxi.setHotkey(spec)
+    setHotkeyState(applied ?? spec)
+  }
 
   async function refreshVocab() {
     const words = await window.voxi.getVocabulary()
@@ -379,11 +485,8 @@ export default function SettingsPanel({ onClose }: Props) {
         </div>
 
         {/* Hotkey */}
-        <Row label="Hotkey">
-          <div style={{ display: 'flex', gap: 3 }}>
-            <Kbd>⌘</Kbd>
-            <Kbd>0</Kbd>
-          </div>
+        <Row label="Hotkey" hint="Hold to record, release to transcribe">
+          <HotkeyRecorder spec={hotkey} onChange={changeHotkey} />
         </Row>
 
         <Divider />

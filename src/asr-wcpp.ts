@@ -102,7 +102,10 @@ function deRepeat(text: string): string {
  */
 function buildPrompt(opts: TranscribeOptions): string {
   const parts: string[] = [];
-  if (opts.appName) parts.push(`Dictating in ${opts.appName}.`);
+  // Skip unknown/empty app — "Dictating in Unknown." is garbage context that hurts decoder.
+  if (opts.appName && opts.appName !== 'Unknown') {
+    parts.push(`Dictating in ${opts.appName}.`);
+  }
   if (opts.vocabulary && opts.vocabulary.length) {
     // Cap at 15 terms — large prompts bias too strongly and may leak into unrelated audio.
     const terms = opts.vocabulary.slice(0, 15).join(', ');
@@ -127,6 +130,11 @@ export async function transcribeAudio(base64Pcm: string, opts: TranscribeOptions
     console.warn('[asr-wcpp] audio effectively silent — check mic permission / input device');
     return '';
   }
+  // Energy gate: noise-only audio (breath, fan, ambient) → Whisper hallucinates. Skip.
+  if (rms < 0.006) {
+    console.warn(`[asr-wcpp] audio below speech energy threshold (rms=${rms.toFixed(4)}) — treating as no-speech`);
+    return '';
+  }
 
   const initialPrompt = buildPrompt(opts);
   if (initialPrompt) {
@@ -141,10 +149,14 @@ export async function transcribeAudio(base64Pcm: string, opts: TranscribeOptions
     no_timestamps: true,
     single_segment: false,
     suppress_non_speech_tokens: true,
+    suppress_blank: true,
     temperature: 0.0,
-    temperature_inc: 0.2,    // retry decode at higher temp if logprob/compression fails
-    logprob_thold: -1.0,     // avg logprob threshold for retry
-    no_speech_thold: 0.6,    // drop segment if no-speech prob exceeds this → kills silence hallucinations
+    temperature_inc: 0.0,    // disable high-temp fallback — primary cause of "the- the- the-" stutter
+    logprob_thold: -1.0,
+    no_speech_thold: 0.7,
+    no_context: true,        // critical: disables condition_on_previous_text. KV state leaking across
+                             // calls was producing "bug, bug, bug is, bug is currently..." repetition.
+    max_tokens: 224,         // hard cap per segment — if decoder enters repetition loop, halts it.
     initial_prompt: initialPrompt || undefined,
   });
   const results = await task.result;

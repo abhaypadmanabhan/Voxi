@@ -9,7 +9,6 @@ interface Props {
   amplitudes: number[]
   streamingPreview: string
   transcript: string
-  correctionLearned: boolean
   onClick: () => void
   onRightClick: () => void
   onDismissTranscript: () => void
@@ -94,44 +93,11 @@ function PreviewText({
   )
 }
 
-function CorrectionBadge({ show }: { show: boolean }) {
-  return (
-    <AnimatePresence>
-      {show && (
-        <motion.div
-          key="badge"
-          initial={{ opacity: 0, scale: 0.85, y: 4 }}
-          animate={{ opacity: 1, scale: 1, y: 0 }}
-          exit={{ opacity: 0, scale: 0.85, y: 4 }}
-          transition={{ type: 'spring', bounce: 0.3, duration: 0.4 }}
-          className="mb-2 flex items-center gap-1.5"
-          style={{
-            height: 28,
-            padding: '0 11px 0 9px',
-            background: 'rgba(6,22,18,0.88)',
-            backdropFilter: 'blur(24px) saturate(1.4)',
-            WebkitBackdropFilter: 'blur(24px) saturate(1.4)',
-            border: '0.5px solid rgba(52,211,153,0.28)',
-            borderRadius: 14,
-            fontSize: 11.5,
-            fontWeight: 500,
-            color: '#d1fae5',
-          }}
-        >
-          <span style={{ color: '#6ee7b7', fontSize: 10 }}>●</span>
-          Correction learned
-        </motion.div>
-      )}
-    </AnimatePresence>
-  )
-}
-
 export default function VoxiPill({
   status,
   amplitudes,
   streamingPreview,
   transcript,
-  correctionLearned,
   onClick,
   onRightClick,
   onDismissTranscript,
@@ -178,7 +144,6 @@ export default function VoxiPill({
       onMouseLeave={() => setHovered(false)}
     >
       <PreviewText text={previewText} isStreaming={isStreaming} onDismiss={onDismissTranscript} />
-      <CorrectionBadge show={correctionLearned} />
       <div style={{ position: 'relative', display: 'flex', alignItems: 'center' }}>
         <motion.button
           layout
