@@ -92,6 +92,9 @@ export default function App() {
   const micRef = useRef<MicState | null>(null)
   const analyserRef = useRef<AnalyserNode | null>(null)
   const animFrameRef = useRef<number>(0)
+  // Pre-warmed stream: opening getUserMedia is ~200-300ms on cold start. Keep a stream
+  // open (tracks muted) so hold-to-talk captures the first 300ms instead of losing it.
+  const warmStreamRef = useRef<MediaStream | null>(null)
 
   useEffect(() => {
     window.voxi.onStatus((s) => {
@@ -115,18 +118,50 @@ export default function App() {
     })
     window.voxi.onStartMic(() => startMic().catch((e) => console.error('[mic] failed:', e)))
     window.voxi.onStopMic(stopMic)
+    // Fire-and-forget pre-warm of mic stream so first hold-to-talk is instant.
+    void prewarmMic()
+    return () => {
+      warmStreamRef.current?.getTracks().forEach((t) => t.stop())
+      warmStreamRef.current = null
+    }
   }, [])
 
+  async function prewarmMic() {
+    try {
+      const stream = await navigator.mediaDevices.getUserMedia({
+        audio: {
+          sampleRate: 16000,
+          channelCount: 1,
+          echoCancellation: true,
+          noiseSuppression: true,
+        },
+      })
+      // Mute until recording so no audio samples are captured, but HW stays open.
+      stream.getAudioTracks().forEach((t) => (t.enabled = false))
+      warmStreamRef.current = stream
+      console.log('[mic] pre-warmed')
+    } catch (e) {
+      console.warn('[mic] pre-warm failed (non-fatal):', e)
+    }
+  }
+
   async function startMic() {
-    console.log('[mic] requesting getUserMedia')
-    const stream = await navigator.mediaDevices.getUserMedia({
-      audio: {
-        sampleRate: 16000,
-        channelCount: 1,
-        echoCancellation: true,
-        noiseSuppression: true,
-      },
-    })
+    let stream = warmStreamRef.current
+    if (stream && stream.getAudioTracks().every((t) => t.readyState === 'live')) {
+      stream.getAudioTracks().forEach((t) => (t.enabled = true))
+      warmStreamRef.current = null // hand off — will rewarm on stop
+      console.log('[mic] reused pre-warmed stream')
+    } else {
+      console.log('[mic] requesting getUserMedia (no warm stream)')
+      stream = await navigator.mediaDevices.getUserMedia({
+        audio: {
+          sampleRate: 16000,
+          channelCount: 1,
+          echoCancellation: true,
+          noiseSuppression: true,
+        },
+      })
+    }
     const ctx = new AudioContext({ sampleRate: 16000 })
     const workletBlob = new Blob([WORKLET_CODE], { type: 'application/javascript' })
     await ctx.audioWorklet.addModule(URL.createObjectURL(workletBlob))
@@ -170,6 +205,8 @@ export default function App() {
     m.ctx.close()
     m.stream.getTracks().forEach((t) => t.stop())
     micRef.current = null
+    // Rewarm for next hold-to-talk so the next press is instant too.
+    void prewarmMic()
   }
 
   function tickAmplitude() {

@@ -212,10 +212,21 @@ app.whenReady().then(() => {
     )
   }
 
+  // Set VOXI_HOTKEY_DEBUG=1 to log every keydown whose keycode matches — useful when
+  // auditing false-positive hold-to-talk fires (e.g. Cmd+Shift+0 from other apps).
+  const hotkeyDebug = process.env.VOXI_HOTKEY_DEBUG === '1'
+
   uIOhook.on('keydown', (e: UiohookKeyboardEvent) => {
     if (hotkeyCode === null) return
-    if (e.keycode === hotkeyCode && modsExactMatch(e) && !isRecording) {
-      startPipeline()
+    if (e.keycode === hotkeyCode) {
+      if (hotkeyDebug) {
+        console.log(
+          `[hotkey] keycode match. got={meta:${e.metaKey},ctrl:${e.ctrlKey},alt:${e.altKey},shift:${e.shiftKey}} ` +
+            `spec={meta:${hotkey.meta},ctrl:${hotkey.ctrl},alt:${hotkey.alt},shift:${hotkey.shift}} ` +
+            `exact=${modsExactMatch(e)} recording=${isRecording}`,
+        )
+      }
+      if (modsExactMatch(e) && !isRecording) startPipeline()
     }
   })
   uIOhook.on('keyup', (e: UiohookKeyboardEvent) => {

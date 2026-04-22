@@ -15,6 +15,7 @@ function normalizeKey(e: KeyboardEvent): string | null {
     const ch = e.key.toUpperCase()
     if (/[A-Z0-9]/.test(ch)) return ch
   }
+  if (/^F([1-9]|1[0-2])$/.test(e.key)) return e.key
   const named: Record<string, string> = {
     Enter: 'Enter',
     Tab: 'Tab',
@@ -55,7 +56,9 @@ function HotkeyRecorder({ spec, onChange }: { spec: HotkeySpec | null; onChange:
     const key = normalizeKey(e)
     if (!key) return
     const hasMod = e.metaKey || e.ctrlKey || e.altKey
-    if (!hasMod) return
+    // F1–F12 can bind without a modifier (standard convention).
+    const isFKey = /^F([1-9]|1[0-2])$/.test(key)
+    if (!hasMod && !isFKey) return
     const next: HotkeySpec = {
       meta: e.metaKey,
       ctrl: e.ctrlKey,

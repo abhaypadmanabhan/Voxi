@@ -1,4 +1,4 @@
-import { Whisper } from 'smart-whisper';
+import { Whisper, WhisperSamplingStrategy } from 'smart-whisper';
 import { cpus } from 'node:os';
 import { ensureWhisperModel } from './model-loader.js';
 
@@ -9,37 +9,98 @@ export interface TranscribeOptions {
   appName?: string;
 }
 
-let _whisper: Whisper | null = null;
-let _loadPromise: Promise<Whisper> | null = null;
+// Fresh Whisper instance per inference — smart-whisper@0.8.1 leaks graph-allocator /
+// KV-cache state across calls (`ggml_gallocr_needs_realloc: KQ_mask` spam + stutter
+// repetition "this, this, this") despite no_context:true. Reload neutralizes it.
+//
+// Warm-spare: keep `_active` for the current call and `_spare` preloaded idle. On
+// release, free active, promote spare, refill spare in background. Caller sees
+// zero added latency after steady state. ~2x model RAM.
+let _active: Whisper | null = null;
+let _spare: Whisper | null = null;
+let _spareLoading: Promise<Whisper> | null = null;
+let _activeLoading: Promise<Whisper> | null = null;
+let _modelPath: string | null = null;
 
-async function getWhisper(): Promise<Whisper> {
-  if (_whisper) return _whisper;
-  if (_loadPromise) return _loadPromise;
-
-  _loadPromise = (async () => {
-    const modelPath = await ensureWhisperModel((m) => console.log(m));
-    console.log(`[asr-wcpp] loading model from ${modelPath} (gpu=Metal)...`);
-    const t0 = Date.now();
-    // offload is in seconds (internally setTimeout(_, offload * 1000)). Infinity * 1000
-    // overflows int32 → clamped to 1ms → model reloads each call. Use 24h instead.
-    const w = new Whisper(modelPath, { gpu: true, offload: 86400 });
-    await w.load();
-    console.log(`[asr-wcpp] model loaded in ${Date.now() - t0}ms`);
-    _whisper = w;
-    return w;
-  })();
-
-  try {
-    return await _loadPromise;
-  } catch (err) {
-    _loadPromise = null;
-    throw err;
+async function loadFreshWhisper(): Promise<Whisper> {
+  if (!_modelPath) {
+    _modelPath = await ensureWhisperModel((m) => console.log(m));
   }
+  const t0 = Date.now();
+  // offload is in seconds (internally setTimeout(_, offload * 1000)). Infinity * 1000
+  // overflows int32 → clamped to 1ms → model reloads each call. Use 24h instead.
+  const w = new Whisper(_modelPath, { gpu: true, offload: 86400 });
+  await w.load();
+  console.log(`[asr-wcpp] model loaded in ${Date.now() - t0}ms`);
+  return w;
+}
+
+function ensureSpareLoading(): Promise<Whisper> {
+  if (_spare) return Promise.resolve(_spare);
+  if (_spareLoading) return _spareLoading;
+  _spareLoading = loadFreshWhisper()
+    .then((w) => {
+      _spare = w;
+      _spareLoading = null;
+      return w;
+    })
+    .catch((err) => {
+      _spareLoading = null;
+      throw err;
+    });
+  return _spareLoading;
+}
+
+async function acquire(): Promise<Whisper> {
+  if (_active) return _active;
+  if (_activeLoading) return _activeLoading;
+  // No active yet — promote spare if ready, else load one directly.
+  if (_spare) {
+    _active = _spare;
+    _spare = null;
+    // Kick off spare refill in background; don't await.
+    void ensureSpareLoading().catch((err) =>
+      console.warn('[asr-wcpp] spare refill failed:', err),
+    );
+    return _active;
+  }
+  _activeLoading = loadFreshWhisper()
+    .then((w) => {
+      _active = w;
+      _activeLoading = null;
+      return w;
+    })
+    .catch((err) => {
+      _activeLoading = null;
+      throw err;
+    });
+  return _activeLoading;
+}
+
+function release(w: Whisper): void {
+  // Fire-and-forget: free the just-used instance, promote spare, refill spare.
+  if (_active === w) _active = null;
+  void (async () => {
+    try {
+      await w.free();
+    } catch (err) {
+      console.warn('[asr-wcpp] free failed:', err);
+    }
+    if (_spare) {
+      _active = _spare;
+      _spare = null;
+    }
+    try {
+      await ensureSpareLoading();
+    } catch (err) {
+      console.warn('[asr-wcpp] spare refill failed:', err);
+    }
+  })();
 }
 
 export async function initMoonshine(): Promise<void> {
   const t0 = Date.now();
-  const w = await getWhisper();
+  const w = await acquire();
   console.log(`[asr-wcpp] init total ${Date.now() - t0}ms`);
 
   // Warmup: 1s silence through full pipeline
@@ -59,6 +120,41 @@ export async function initMoonshine(): Promise<void> {
   } catch (err) {
     console.warn('[asr-wcpp] warmup failed (non-fatal):', err);
   }
+
+  // Preload spare so first real inference also gets a fresh instance.
+  void ensureSpareLoading().catch((err) =>
+    console.warn('[asr-wcpp] spare preload failed:', err),
+  );
+}
+
+/**
+ * Trim leading + trailing silence. Whisper hallucinates on long silent tails, producing
+ * "Play... Play... Play..." repetition loops. Windowed RMS: 20ms frames, keep from first
+ * to last frame above threshold, pad each side by 200ms so we don't clip speech onsets.
+ */
+function trimSilence(pcm: Float32Array, sampleRate = 16000, rmsThold = 0.008): Float32Array {
+  const frame = Math.floor(sampleRate * 0.02); // 20ms
+  const pad = Math.floor(sampleRate * 0.2); // 200ms
+  if (pcm.length <= frame * 3) return pcm;
+  let firstVoiced = -1;
+  let lastVoiced = -1;
+  for (let i = 0; i + frame <= pcm.length; i += frame) {
+    let acc = 0;
+    for (let j = 0; j < frame; j++) {
+      const v = pcm[i + j];
+      acc += v * v;
+    }
+    const rms = Math.sqrt(acc / frame);
+    if (rms >= rmsThold) {
+      if (firstVoiced < 0) firstVoiced = i;
+      lastVoiced = i + frame;
+    }
+  }
+  if (firstVoiced < 0) return pcm; // all silence — let energy gate below handle it
+  const start = Math.max(0, firstVoiced - pad);
+  const end = Math.min(pcm.length, lastVoiced + pad);
+  if (end - start === pcm.length) return pcm;
+  return pcm.slice(start, end);
 }
 
 function pcm16ToFloat32(pcmBuffer: Buffer): Float32Array {
@@ -115,7 +211,13 @@ function buildPrompt(opts: TranscribeOptions): string {
 }
 
 export async function transcribeAudio(base64Pcm: string, opts: TranscribeOptions = {}): Promise<string> {
-  const float32 = pcm16ToFloat32(Buffer.from(base64Pcm, 'base64'));
+  const raw32 = pcm16ToFloat32(Buffer.from(base64Pcm, 'base64'));
+  const rawDur = (raw32.length / 16000).toFixed(2);
+  const float32 = trimSilence(raw32);
+  const trimmedDur = (float32.length / 16000).toFixed(2);
+  if (raw32.length !== float32.length) {
+    console.log(`[asr-wcpp] trimmed silence: ${rawDur}s → ${trimmedDur}s`);
+  }
 
   let peak = 0;
   let rmsAccum = 0;
@@ -125,7 +227,7 @@ export async function transcribeAudio(base64Pcm: string, opts: TranscribeOptions
     rmsAccum += v * v;
   }
   const rms = Math.sqrt(rmsAccum / float32.length);
-  console.log(`[asr-wcpp] audio peak=${peak.toFixed(3)} rms=${rms.toFixed(4)} samples=${float32.length} dur=${(float32.length / 16000).toFixed(2)}s`);
+  console.log(`[asr-wcpp] audio peak=${peak.toFixed(3)} rms=${rms.toFixed(4)} samples=${float32.length} dur=${trimmedDur}s`);
   if (peak < 0.002) {
     console.warn('[asr-wcpp] audio effectively silent — check mic permission / input device');
     return '';
@@ -141,27 +243,43 @@ export async function transcribeAudio(base64Pcm: string, opts: TranscribeOptions
     console.log(`[asr-wcpp] initial_prompt="${initialPrompt}"`);
   }
 
-  const w = await getWhisper();
+  const w = await acquire();
   const tInfer = Date.now();
+  // audio_ctx: whisper pads audio to 30s and decodes the full padded window by default.
+  // Setting audio_ctx to ceil(actualDurSeconds/0.02) clamps decoder attention to real audio,
+  // preventing hallucination loops on the silent tail. 1500 = full 30s window.
+  const audioFrames = Math.min(1500, Math.max(128, Math.ceil(float32.length / 16000 / 0.02)));
   const task = await w.transcribe(float32, {
+    strategy: WhisperSamplingStrategy.WHISPER_SAMPLING_BEAM_SEARCH,
+    beam_size: 5,
+    best_of: 5,
+    audio_ctx: audioFrames,
     language: 'en',
     n_threads: Math.max(1, cpus().length - 1),
     no_timestamps: true,
-    single_segment: false,
+    single_segment: true, // short dictations, avoid cross-segment confusion
     suppress_non_speech_tokens: true,
     suppress_blank: true,
     temperature: 0.0,
-    temperature_inc: 0.0,    // disable high-temp fallback — primary cause of "the- the- the-" stutter
+    // temperature fallback IS the cure for repetition loops, not the cause. When greedy
+    // decode at T=0 enters a loop ("Play... Play... Play..."), whisper retries at T+=0.2
+    // and usually escapes. Disabling this (inc=0.0) removed the escape hatch and made
+    // stutter unrecoverable once triggered.
+    temperature_inc: 0.2,
+    // Triggers temperature fallback when decoder entropy too low (i.e., stuck repeating
+    // same token). Default is 2.4; 2.8 is stricter = catches loops earlier.
+    entropy_thold: 2.8,
     logprob_thold: -1.0,
     no_speech_thold: 0.7,
-    no_context: true,        // critical: disables condition_on_previous_text. KV state leaking across
-                             // calls was producing "bug, bug, bug is, bug is currently..." repetition.
-    max_tokens: 224,         // hard cap per segment — if decoder enters repetition loop, halts it.
+    no_context: true,        // disables condition_on_previous_text — belt-and-suspenders with per-call reload.
+    max_tokens: 224,         // hard cap per segment — bounds worst-case loop length.
     initial_prompt: initialPrompt || undefined,
   });
   const results = await task.result;
   const raw = results.map((r) => r.text).join(' ').trim();
   console.log(`[asr-wcpp] inference ${Date.now() - tInfer}ms, segments=${results.length}, text="${raw}"`);
+  // Release (free + promote spare + refill) happens in background — caller returns immediately.
+  release(w);
 
   const cleaned = deRepeat(raw);
   if (raw && !cleaned) {
